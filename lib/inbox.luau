@@ -111,11 +111,13 @@ local function apply_rules(state: any)
 	for _, item in state.items do
 		local rule = rules[item.chat_id]
 		local star = is_star(item.sender_id)
-		local wanted = (item.mention and item.via ~= "@所有人" and settings.get("source_mention"))
-			or (item.via == "@所有人" and settings.get("source_atall"))
+		local at_all = item.via == "@所有人"
+		local hide_atall = settings.get("hide_atall")
+		local wanted = (item.mention and not at_all and settings.get("source_mention"))
+			or (at_all and not hide_atall)
 			or (item.chat_type == "p2p" and settings.get("source_dm"))
 			or (star and settings.get("source_star"))
-		local hidden = not wanted or (rule and rule.mode == "hide") or (item.sender_type == "bot" and settings.get("hide_bots"))
+		local hidden = not wanted or (at_all and hide_atall) or (rule and rule.mode == "hide") or (item.sender_type == "bot" and settings.get("hide_bots"))
 		if settings.get("hide_muted") and item.chat_type ~= "p2p" then
 			local pref = state.chat_settings and state.chat_settings[item.chat_id]
 			hidden = hidden or not pref or pref.is_muted or (item.via == "@所有人" and pref.is_mute_at_all)
@@ -533,13 +535,16 @@ local function merge(state: any, sources: { any })
 			end
 		end
 		item.deleted = entry.message.deleted == true
+		local mentions_me = false
+		for _, m in (if type(entry.message.mentions) == "table" then entry.message.mentions else {}) do
+			mentions_me = mentions_me or (type(m) == "table" and m.id == state.me)
+		end
 		if entry.mention then
 			item.mention = true
-			local mentions_me = false
-			for _, m in (if type(entry.message.mentions) == "table" then entry.message.mentions else {}) do
-				mentions_me = mentions_me or (type(m) == "table" and m.id == state.me)
-			end
 			item.via = if mentions_me then "@我" else "@所有人"
+		elseif item.via == "群聊" and not mentions_me and feishu.mentions_all(item.content) then
+			-- Found through another source, such as a starred sender's message.
+			item.via = "@所有人"
 		end
 		if item.chat_type == "p2p" and not item.triage then
 			local older = chats[item.chat_id]
@@ -635,7 +640,7 @@ local function refresh(state: any)
 
 	local function search_all(after: () -> ())
 		local sources = {}
-		if settings.get("source_mention") or settings.get("source_atall") then
+		if settings.get("source_mention") or not settings.get("hide_atall") then
 			table.insert(sources, { filters = { "--is-at-me" }, mention = true })
 		end
 		if settings.get("source_dm") then

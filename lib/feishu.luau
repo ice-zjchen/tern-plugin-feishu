@@ -235,6 +235,13 @@ function feishu.images_in(content: string, limit: number): { string }
 	return keys
 end
 
+-- Whether a message's text carries an @所有人, in any of the forms the CLI writes.
+function feishu.mentions_all(content: string): boolean
+	return string.find(content, "@_all", 1, true) ~= nil
+		or string.find(content, '<at user_id="all"', 1, true) ~= nil
+		or string.find(content, "@everyone", 1, true) ~= nil
+end
+
 function feishu.clean(content: string): string
 	return (string.gsub(content, IMAGE, "[图片]"))
 end

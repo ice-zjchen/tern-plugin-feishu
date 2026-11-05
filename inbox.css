@@ -107,9 +107,12 @@
 	[data-role='fl.status'] { padding: 3px 14px 5px; border-top: 1px solid var(--fl-line); }
 
 	/* The settings page. */
-	[data-role='fl.settings'] { padding: 14px 14px 10px; column-gap: 12px; row-gap: 16px; align-items: stretch; flex: 1 1 1px; height: 1px; min-height: 0; overflow: auto; }
-	[data-role='fl.settings'] > [data-role='fl.block'] { flex: 1 1 42ch; height: 28em; max-height: 100%; }
-	[data-role='fl.field'], [data-role='fl.field.current'] { padding: 3px 6px; min-height: 2em; flex: 0 0 auto; }
+	/* Two columns while they fit, else one. The page scrolls; groups take their rows' height. */
+	[data-role='fl.settings'] { padding: 20px 20px 16px; column-gap: 20px; row-gap: 24px; align-items: flex-start; flex: 1 1 1px; height: 1px; min-height: 0; overflow: auto; }
+	[data-role='fl.settings.column'] { flex: 1 1 52ch; min-width: 0; max-width: 92ch; row-gap: 24px; }
+	[data-role='fl.group'] { position: relative; flex: 0 0 auto; min-width: 0; padding-top: 12px; border: 1px solid var(--fl-line); }
+	[data-role='fl.group.body'] { padding: 0 6px 8px; min-width: 0; }
+	[data-role='fl.field'], [data-role='fl.field.current'] { padding: 8px 10px; flex: 0 0 auto; }
 	[data-role='fl.field.current'] { background: var(--l1); box-shadow: inset 2px 0 0 var(--accent); }
 	[data-role='fl.field.input'] { flex: 1 1 auto; }
 }

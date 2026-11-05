@@ -485,7 +485,7 @@ local function field_row(state: any, field: any): any
 	else
 		local editing = state.mode == "setting" and current
 		control = ui.node("col", { key = "wrap", gap = "xs" }, {
-			line({ field.label, t(if field.hint then "  " .. field.hint else "", "muted") }),
+			line(field.label),
 			ui.node("input", {
 				key = "c",
 				text = value,
@@ -493,9 +493,22 @@ local function field_row(state: any, field: any): any
 				readonly = not editing,
 				placeholder = "回车编辑",
 			}),
+			line({ t(field.hint or "", "muted") }),
 		})
 	end
 	return ui.node("col", { key = "f_" .. field.id, role = if current then "fl.field.current" else "fl.field" }, { control })
+end
+
+-- A framed group that takes the height of its rows: the page scrolls, not the group.
+local function settings_group(key: string, number: string, title: string, meta: string?, rows: { any }): any
+	local frame: { any } = {
+		ui.node("text", { key = "title", role = "fl.title", spans = { t(number, "accent strong"), " " .. title } }),
+	}
+	if meta then
+		table.insert(frame, ui.node("text", { key = "meta", role = "fl.meta", spans = { t(meta, "muted") } }))
+	end
+	table.insert(frame, ui.node("col", { key = "body", role = "fl.group.body", gap = "none" }, rows))
+	return ui.node("col", { key = key, role = "fl.group", gap = "none" }, frame)
 end
 
 local function rules_block(state: any): any
@@ -521,11 +534,11 @@ local function rules_block(state: any): any
 	if #rows == 0 then
 		table.insert(rows, line({ t("在队列里按 i 不显示某个会话，按 n 让它显示但不交给 agent。", "muted") }))
 	end
-	return block("rules", "4", "会话规则", tostring(#ids) .. " 条", rows)
+	return settings_group("rules", "6", "会话规则", tostring(#ids) .. " 条", rows)
 end
 
 function view.settings_body(state: any): any
-	local blocks = {}
+	local columns: { [string]: { any } } = { left = {}, right = {} }
 	for _, group in settings.GROUPS do
 		local rows = {}
 		for _, field in settings.FIELDS do
@@ -533,15 +546,25 @@ function view.settings_body(state: any): any
 				table.insert(rows, field_row(state, field))
 			end
 		end
-		table.insert(blocks, block(group.id, group.number, group.title, nil, rows))
+		table.insert(columns[group.column], settings_group(group.id, group.number, group.title, nil, rows))
 	end
-	table.insert(blocks, rules_block(state))
-	return ui.node("row", { key = "settings", role = "fl.settings", wrap = true, align = "start" }, blocks)
+	table.insert(columns.right, rules_block(state))
+	return ui.node("row", { key = "settings", role = "fl.settings", wrap = true, align = "start" }, {
+		ui.node("col", { key = "left", role = "fl.settings.column", gap = "none" }, columns.left),
+		ui.node("col", { key = "right", role = "fl.settings.column", gap = "none" }, columns.right),
+	})
 end
 
 -- The id of a settings field's control, for focus.
 function view.field_control_id(id: string): string
-	return "main.settings." .. settings.field(id).group .. ".body.f_" .. id .. ".wrap.c"
+	local field = settings.field(id)
+	local column = "left"
+	for _, group in settings.GROUPS do
+		if group.id == field.group then
+			column = group.column
+		end
+	end
+	return "main.settings." .. column .. "." .. field.group .. ".body.f_" .. id .. ".wrap.c"
 end
 
 -- Whether a message is settled: nothing about it can change any more.
