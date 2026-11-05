@@ -1,0 +1,16 @@
+schema = 1
+id = "tern-plugin-feishu"
+name = "飞书工作台"
+version = "0.2.0"
+description = "让个人 agent 预处理飞书消息，由你审核后再发送"
+host = "host.luau"
+window = "window.luau"
+styles = ["inbox.css"]
+
+[[blocks]]
+id = "inbox"
+title = "飞书工作台"
+
+[[blocks]]
+id = "mentions"
+title = "飞书 @我的消息"

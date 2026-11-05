@@ -1,0 +1,115 @@
+/* tern-plugin-feishu workbench: a TUI layout drawn in the colors of Tern's own theme.
+   Only theme variables here, so every theme and both appearances just work. */
+
+.sf-main[data-surface='plugin.tern-plugin-feishu.inbox'] {
+	display: flex;
+	flex-direction: column;
+	padding: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+
+[data-surface='plugin.tern-plugin-feishu.inbox'] {
+	--fl-bg: var(--tv-bg, var(--panel));
+	--fl-line: var(--l3);
+
+	[data-id='main.head'] { flex: 0 0 auto; }
+	[data-role='fl.bar'] { padding: 5px 14px; border-bottom: 1px solid var(--fl-line); }
+	[data-role='fl.notice'] { padding: 4px 14px; white-space: pre-wrap; border-bottom: 1px solid var(--fl-line); max-height: 4em; overflow: auto; }
+	[data-role='fl.strip'] { padding: 4px 12px; border-bottom: 1px solid var(--fl-line); max-height: 5em; overflow: auto; }
+	/* Allocate the viewport, not the content. Measured in Tern: zero flex-bases here
+	   let long content stretch the page, so every share below starts from 1px. */
+	[data-role='fl.layout'], [data-role='fl.layout.stack'] {
+		flex: 1 1 1px;
+		height: 1px;
+		min-height: 0;
+		min-width: 0;
+		padding: 14px 14px 10px;
+		align-items: stretch;
+		column-gap: 12px;
+		row-gap: 16px;
+	}
+	[data-role='fl.column'], [data-role='fl.column.left'], [data-role='fl.column.middle'] {
+		min-height: 0;
+		min-width: 0;
+		flex: 1 1 1px;
+		row-gap: 16px;
+	}
+	[data-role='fl.column.left'] { width: 26ch; flex: 0 1 26ch; }
+	[data-role='fl.column.middle'] { flex: 0 1 32%; }
+	[data-role='fl.layout.stack'] > [data-id='main.body.middle'] { flex: 1 1 1px; }
+	[data-role='fl.layout.stack'] > [data-id='main.body.right'] { flex: 2 1 1px; }
+	/* Keeps the message and analysis readable: in a short window the reply gives way. */
+	[data-role='fl.top'] { min-height: 9em; min-width: 0; flex: 1 1 1px; }
+
+	/* A block: a hairline frame with its title sitting on the border. */
+	[data-role='fl.block'], [data-role='fl.block.log'], [data-role='fl.block.on'] {
+		position: relative;
+		border: 1px solid var(--fl-line);
+		min-height: 0;
+		min-width: 0;
+		flex: 1 1 1px;
+		padding-top: 10px;
+		overflow: visible;
+	}
+	/* Sized for its tabs, a five-line draft and the actions; shrinks and scrolls in a short window. */
+	[data-role='fl.block.on'] { border-color: var(--accent); flex: 0 1 15em; }
+	[data-role='fl.block.log'] { flex: 0.35 1 1px; }
+	[data-role='fl.title'], [data-role='fl.meta'] {
+		position: absolute;
+		top: -0.75em;
+		padding: 0 6px;
+		background: var(--fl-bg);
+		white-space: nowrap;
+		z-index: 1;
+	}
+	[data-role='fl.title'] { left: 8px; font-weight: 600; }
+	[data-role='fl.meta'] { right: 8px; max-width: 65%; overflow: hidden; text-overflow: ellipsis; }
+	[data-role='fl.body'] { padding: 2px 10px 8px; min-height: 0; min-width: 0; flex: 1 1 1px; }
+	[data-role='fl.body'] > .sf-scroll-view { min-height: 0; }
+	[data-role='fl.foot'] { flex: 0 0 auto; padding: 0 10px 8px; }
+
+	[data-role='fl.nav'], [data-role='fl.nav.current'] { padding: 1px 6px; cursor: pointer; }
+	[data-role='fl.nav']:hover { background: var(--l1); }
+	[data-role='fl.nav.current'] { background: var(--accent-fill); font-weight: 600; }
+	[data-role='fl.nav.current'] .sf-text, [data-role='fl.nav.current'] .sf-text * { color: #fff; }
+
+	[data-role='fl.section'] { margin-top: 8px; }
+
+	/* The queue: three-line rows, kept in view by Tern's list. */
+	[data-role='fl.queue'] {
+		--sf-row: calc(3 * var(--sf-lh) + 11px);
+		margin-top: 2px;
+		flex: 1 1 1px;
+		min-height: 0;
+		overflow: hidden;
+		.sf-list-scroll.max { height: 100%; max-height: 100% !important; }
+		.sf-item {
+			height: var(--sf-row);
+			align-items: flex-start;
+			padding: 5px 10px 5px 4px;
+			border-radius: 0;
+			border-bottom: 1px solid var(--fl-line);
+			cursor: pointer;
+		}
+		.sf-item > * { white-space: pre; }
+	}
+
+	[data-role='fl.msg'], [data-role='fl.msg.hit'] { padding: 5px 7px; margin-bottom: 4px; white-space: pre-wrap; }
+	[data-role='fl.msg.hit'] { background: var(--l1); }
+	[data-role='fl.warn'] { margin-top: 8px; padding: 5px 8px; background: var(--l1); white-space: pre-wrap; }
+	[data-role='fl.empty'] { padding: 14px 12px; }
+	[data-role='fl.talk'] { white-space: pre-wrap; margin-top: 3px; }
+
+	[data-role='fl.draft'] { background: var(--l1); padding: 7px 9px; margin: 6px 0 8px; min-height: 5em; }
+
+	[data-role='fl.cmd'] { margin: 0 14px 6px; padding: 2px 4px 2px 10px; border: 1px solid var(--fl-line); }
+	[data-role='fl.status'] { padding: 3px 14px 5px; border-top: 1px solid var(--fl-line); }
+
+	/* The settings page. */
+	[data-role='fl.settings'] { padding: 14px 14px 10px; column-gap: 12px; row-gap: 16px; align-items: stretch; flex: 1 1 1px; height: 1px; min-height: 0; overflow: auto; }
+	[data-role='fl.settings'] > [data-role='fl.block'] { flex: 1 1 42ch; height: 28em; max-height: 100%; }
+	[data-role='fl.field'], [data-role='fl.field.current'] { padding: 3px 6px; min-height: 2em; flex: 0 0 auto; }
+	[data-role='fl.field.current'] { background: var(--l1); box-shadow: inset 2px 0 0 var(--accent); }
+	[data-role='fl.field.input'] { flex: 1 1 auto; }
+}
