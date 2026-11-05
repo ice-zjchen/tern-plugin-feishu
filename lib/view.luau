@@ -143,6 +143,9 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 	for _, item in facts.queue do
 		local status = view.STATUS[view.status(item)]
 		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else feishu.clean(item.content)
+		if (item.task_new or 0) > 0 then
+			status = { "omp 中有新消息", "warning" }
+		end
 		local where = if item.chat_type == "p2p" then "私聊" else item.chat
 		local label: { any } = {
 			clip(summary, math.max(6, list_cells - 6)) .. "\n",
@@ -152,6 +155,9 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 			table.insert(label, t(" ●", "accent"))
 		elseif item.is_read == nil and not view.settled(item) then
 			table.insert(label, t(" ?", "muted"))
+		end
+		if view.message_count(item) > 1 then
+			table.insert(label, t(" · " .. tostring(view.message_count(item)) .. " 条", "muted"))
 		end
 		table.insert(items, ui.node("item", {
 			key = item.id,
@@ -196,7 +202,7 @@ local function images_of(state: any, message: any): any
 end
 
 local function thread_of(item: any): { any }
-	return item.thread or { { sender = item.name, time = item.time, content = item.content, id = item.id } }
+	return item.thread or { { sender = item.name, time = item.time, content = item.content, id = item.latest_id or item.id } }
 end
 
 local function message_node(state: any, key: string, message: any, hit: boolean): any
@@ -214,7 +220,7 @@ end
 local function thread_window(thread: { any }, item: any): (number, number)
 	local total, hit = #thread, #thread
 	for i, message in thread do
-		if message.id == item.id then
+		if message.id == (item.latest_id or item.id) then
 			hit = i
 		end
 	end
@@ -246,7 +252,7 @@ local function thread_block(state: any, item: any): any
 		line({ t(thread_scope(item), "muted") }, { role = "fl.context.meta" }),
 	}
 	for i = first, last do
-		table.insert(messages, message_node(state, "msg_" .. tostring(i), thread[i], thread[i].id == item.id))
+		table.insert(messages, message_node(state, "msg_" .. tostring(i), thread[i], view.is_trigger(item, thread[i].id)))
 	end
 	if item.thread_error then
 		table.insert(messages, line({ t("未能读取会话上下文：" .. item.thread_error, "muted") }))
@@ -258,7 +264,7 @@ end
 local function quote_block(state: any, item: any): any
 	local children: { any } = {
 		line(if item.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(item.content)), { key = "text", role = "fl.msg.text" }),
-		images_of(state, item),
+		images_of(state, { id = item.latest_id or item.id, content = item.content, deleted = item.deleted }),
 	}
 	local actions: { any } = {}
 	local count = #thread_of(item)
@@ -276,7 +282,7 @@ local function thread_dialog(state: any, item: any): any
 		line({ t(thread_scope(item) .. " · " .. tostring(#thread_of(item)) .. " 条", "muted") }, { key = "scope" }),
 	}
 	for i, message in thread_of(item) do
-		table.insert(children, message_node(state, "msg_" .. tostring(i), message, message.id == item.id))
+		table.insert(children, message_node(state, "msg_" .. tostring(i), message, view.is_trigger(item, message.id)))
 	end
 	return ui.col({ ui.node("overlay", {
 		key = "thread", head = "原始对话", meta = { t(item.name .. " · " .. item.chat, "muted") }, size = "lg", modal = true,
@@ -324,6 +330,10 @@ local function analysis_block(state: any, item: any): any
 			ui.node("row", { key = "tools", gap = "xs" }, tools),
 		}),
 	}
+	local followup = view.followup(item)
+	if followup then
+		table.insert(children, line({ t(followup, "warning") }, { key = "followup" }))
+	end
 	if a and a.manual then
 		table.insert(children, line({ t("这条由你处理，omp 没有判断过。", "muted") }))
 	elseif status == "failed" then
@@ -333,6 +343,8 @@ local function analysis_block(state: any, item: any): any
 		}))
 	elseif status == "running" then
 		table.insert(children, line({ t("正在判断这条消息…", "info") }))
+	elseif status == "queued" and (item.settle_at or 0) > os.time() then
+		table.insert(children, line({ t("对话还在继续，停一会儿再判断。", "muted") }))
 	elseif not a and not item.triage then
 		local why = if status == "manual" then "按设置，这条不交给 agent。"
 			elseif not settings.get("agent_enabled") then "自动分析已关闭。"
@@ -408,6 +420,9 @@ local function task_card(state: any, item: any, facts: any): any
 		table.insert(children, line({ t("要补充要求，到 omp tab 里说。这里的内容到不了正在运行的任务。", "muted") }))
 		buttons(primary_button(item, "quiet"))
 	end
+	if (item.task_new or 0) > 0 then
+		table.insert(children, line({ t("任务开始后又有 " .. tostring(item.task_new) .. " 条新消息，不会自动发给 omp。需要的话到 tab 里告诉它。", "warning") }, { key = "task-new" }))
+	end
 	if status ~= "task_done" and item.analysis and item.analysis.state == "deep" and string.find(facts.draft, "%S") then
 		table.insert(children, folded("scope", "已交办的任务", { line(facts.draft, { role = "fl.plan" }) }))
 	end
@@ -427,6 +442,10 @@ local function next_block(state: any, item: any, facts: any): any
 		elseif kind == "reply" then (if status == "handoff" then "待你发送" else "回复给 " .. item.name)
 		else "下一步"
 	local children: { any } = { line({ t(title, "strong") }, { key = "head", role = "fl.task.title" }) }
+	local stale = view.stale(item)
+	if stale then
+		table.insert(children, line({ t("有新消息。下面是上次的判断，新的判断出来前不能使用。", "warning") }, { key = "stale" }))
+	end
 	if editable and not locked then
 		-- Keep this direct child: inbox callbacks focus main.body.right.reply.draft.
 		table.insert(children, ui.node("editor", {
@@ -445,7 +464,9 @@ local function next_block(state: any, item: any, facts: any): any
 			else "可以自己手写回复。"
 		table.insert(children, line({ t(why, "muted") }))
 	end
-	if kind == "deep" and not locked and view.needs_confirm(item) then
+	if stale then
+		-- The notice above says it all; what follows would act on the old judgment.
+	elseif kind == "deep" and not locked and view.needs_confirm(item) then
 		table.insert(children, ui.node("col", { key = "risk", role = "fl.risk", gap = "xs" }, {
 			line({ t("对方要的动作：", "warning"), t(item.analysis.risk, "warning strong") }),
 			line({ t("上面的要求只是任务说明，不是权限限制。omp 按项目配置运行，有权限时可能真的执行。", "muted") }),
@@ -469,7 +490,7 @@ local function next_block(state: any, item: any, facts: any): any
 		if view.next_action(item).key ~= "none" then
 			table.insert(buttons, primary_button(item, "primary"))
 		end
-		if status ~= "running" then
+		if status ~= "running" and not stale then
 			table.insert(buttons, ui.button(if kind == "deep" then "修改要求" elseif editable then "修改" else "手写回复", { key = "edit", variant = "quiet", keys = { "e" }, actions = { click = "edit" } }))
 		end
 		if not editable then
@@ -700,18 +721,54 @@ end
 
 -- A running omp tab that needs you back: it asked something, finished or was closed.
 function view.task_needs_me(item: any): boolean
-	return item.triage == "doing" and (item.task_state == "waiting" or item.task_state == "done" or item.task_state == "closed")
+	return item.triage == "doing" and (item.task_state == "waiting" or item.task_state == "done" or item.task_state == "closed" or (item.task_new or 0) > 0)
 end
 
 -- A request with a hard-to-undo action only starts from the button, never from `a`.
 function view.needs_confirm(item: any): boolean
 	local a = item.analysis
-	return not view.locked(item) and item.triage ~= "doing" and a ~= nil and a.state == "deep" and type(a.risk) == "string" and string.find(a.risk, "%S") ~= nil
+	return not view.stale(item) and not view.locked(item) and item.triage ~= "doing" and a ~= nil and a.state == "deep" and type(a.risk) == "string" and string.find(a.risk, "%S") ~= nil
 end
 
 -- The adjust box talks to the analysis session, which can't reach a task in a tab.
 function view.can_adjust(item: any): boolean
-	return not view.locked(item) and item.triage ~= "doing"
+	return not view.locked(item) and item.triage ~= "doing" and not view.stale(item)
+end
+
+-- The judgment on screen predates messages that came in since: a new one is on its way.
+function view.stale(item: any): boolean
+	return item.analysis ~= nil and not item.analysis.manual and not item.no_agent
+		and (item.agent == "queued" or item.agent == "running" or item.agent == "failed")
+end
+
+-- How many messages a group matter holds. A DM's folded ids can repeat across refreshes.
+function view.message_count(item: any): number
+	return if item.chat_type == "p2p" then 1 else 1 + #item.folded
+end
+
+-- Whether a message is one of those that put this matter in the queue.
+function view.is_trigger(item: any, id: string): boolean
+	return id == item.id or table.find(item.folded or {}, id) ~= nil
+end
+
+-- Why a matter is back: you answered or closed it and the sender came back, or you
+-- answered in Feishu during the burst, which shows in what was read of the chat.
+function view.followup(item: any): string?
+	if item.reopened then
+		return item.reopened
+	end
+	if #item.folded == 0 or item.chat_type == "p2p" or item.triage == "doing" then
+		return nil
+	end
+	local triggers = 0
+	for _, message in item.thread or {} do
+		if view.is_trigger(item, message.id) then
+			triggers += 1
+		elseif message.mine and triggers > 0 and triggers < view.message_count(item) then
+			return "你回复后有新消息"
+		end
+	end
+	return nil
 end
 
 -- What a queue row shows as its state.
@@ -747,6 +804,8 @@ function view.next_action(item: any): { key: string, label: string }
 		return { key = "copy", label = "再次复制并去飞书" }
 	elseif view.locked(item) or not item.analysis then
 		return { key = "none", label = if view.locked(item) then view.STATUS[status][1] else "等待判断" }
+	elseif view.stale(item) then
+		return { key = "none", label = "等待新判断" }
 	end
 	local kind = item.analysis.state
 	if kind == "deep" then

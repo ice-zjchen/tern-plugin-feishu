@@ -176,7 +176,7 @@ end
 local function context(item: any, extras: any): string
 	return tern.json.encode({
 		trigger = {
-			message_id = item.id,
+			message_id = item.latest_id or item.id,
 			chat_id = item.chat_id,
 			sender = item.name,
 			chat = item.chat,
@@ -191,13 +191,40 @@ local function context(item: any, extras: any): string
 	}, true)
 end
 
--- Analyzes a queue item in a new session; `done` gets the analysis and session.
+-- The messages after `through` in what was read of the chat. Nil when `through`
+-- has scrolled out of it, so the caller knows it can't tell what is new.
+local function messages_after(item: any, through: string): { any }?
+	local found, after = false, {}
+	for _, message in item.thread_for_agent or {} do
+		if found then
+			table.insert(after, message)
+		end
+		found = found or message.id == through
+	end
+	return if found then after else nil
+end
+
+-- Analyzes a queue item. With a session that already judged this item and a way to
+-- tell what is new, only that goes in: the session has the rest. Otherwise a new
+-- session gets the whole context. `done` gets the analysis and session.
 function agent.analyze(item: any, extras: any, images: { string }, done: (any, string?, number, string?) -> ())
-	local prompt = "任务类型：自动分析飞书消息。"
-		.. "判断下面的 trigger 是不用处理、回复即可，还是需要深入处理。thread 中 sender 为“我”的是用户自己发的。"
-		.. (if #images > 0 then "附带的图片是 trigger 消息里的图片。" else "")
-		.. "\n\n" .. context(item, extras) .. "\n\n" .. ANALYSIS_FORMAT
-	turn(prompt, nil, images, extras.notice, function(text, session, cost, err)
+	local new_messages = if item.session and item.analysis and item.analyzed_through then messages_after(item, item.analyzed_through) else nil
+	local resume = if new_messages and #new_messages > 0 then item.session else nil
+	local prompt
+	if resume then
+		prompt = "任务类型：同一事项又有新消息。下面是上次判断之后的消息，sender 为“我”的是用户自己发的，其中可能有用户已经做出的回复。"
+			.. "结合之前的判断重新判断现在该怎么处理，已经解决的事不要再要求处理。按格式输出完整结果，draft 和 task 要反映最新情况。"
+			.. (if #images > 0 then "附带的图片是最新消息里的图片。" else "")
+			.. "\n\n" .. tern.json.encode({ new_messages = new_messages, now = os.date("%Y-%m-%d %H:%M") }, true)
+			.. "\n\n" .. ANALYSIS_FORMAT
+	else
+		prompt = "任务类型：自动分析飞书消息。"
+			.. "判断下面的 trigger 是不用处理、回复即可，还是需要深入处理。thread 中 sender 为“我”的是用户自己发的。"
+			.. (if #item.folded > 0 and item.chat_type ~= "p2p" then "同一发送者连续 @ 了用户多次，trigger 是最新一条，之前的几条在 thread 里，一并判断。" else "")
+			.. (if #images > 0 then "附带的图片是 trigger 消息里的图片。" else "")
+			.. "\n\n" .. context(item, extras) .. "\n\n" .. ANALYSIS_FORMAT
+	end
+	turn(prompt, resume, images, extras.notice, function(text, session, cost, err)
 		if err then
 			done(nil, session, cost, err)
 			return

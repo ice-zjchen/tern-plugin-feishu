@@ -29,6 +29,13 @@ local VIEWS = {
 }
 
 local TASK_POLL_MS = 3000
+
+-- Consecutive mentions from one sender in one group are one matter: within this gap
+-- while it is still open, and within the longer one once you have answered or closed it.
+local BURST_SECONDS = 10 * 60
+local REPLY_BACK_SECONDS = 30 * 60
+-- A chat that is still moving gets a moment to finish before omp reads it.
+local SETTLE_SECONDS = 90
 local TASK_LINK = "tern-plugin-feishu://task/"
 
 
@@ -275,6 +282,7 @@ end
 -- The agent pipeline: thread, images, then analysis, a few at a time
 
 local pump: (state: any) -> ()
+local schedule_settled: (state: any) -> ()
 
 local function mime_of(bytes: string): string
 	local head = string.sub(bytes, 1, 12)
@@ -372,11 +380,11 @@ local function load_thread(state: any, item: any, done: () -> ())
 					deleted = message.deleted == true,
 					mine = mine,
 				})
-				seen = seen or message.message_id == item.id
+				seen = seen or message.message_id == (item.latest_id or item.id)
 			end
 		end
 		if not seen then
-			table.insert(thread, { id = item.id, sender = item.name, time = string.sub(item.time, -5), content = item.content, deleted = item.deleted })
+			table.insert(thread, { id = item.latest_id or item.id, sender = item.name, time = string.sub(item.time, -5), content = item.content, deleted = item.deleted })
 		end
 		item.thread = thread
 		item.thread_for_agent = {}
@@ -430,6 +438,9 @@ local function extras(state: any, except: any): any
 end
 
 local function analyze(state: any, item: any, images: { string })
+	local read = item.thread_for_agent
+	local through = if read and #read > 0 then read[#read].id else nil
+	local had_session = item.session ~= nil
 	agent.analyze(item, extras(state, item), images, function(analysis, session, cost, err)
 		state.spent += cost
 		state.active -= 1
@@ -439,15 +450,24 @@ local function analyze(state: any, item: any, images: { string })
 		end
 		if err then
 			item.agent, item.agent_error = "failed", err
+			-- A session that can't be resumed must not fail every retry too.
+			item.session = if had_session then nil else item.session
 			log(state, "agent", item.name .. "：分析失败")
 		else
 			item.agent, item.analysis, item.edited, item.task_edited, item.agent_error = "done", analysis, nil, nil, nil
+			item.analyzed_through = through
 			if item.id == state.selected then
 				state.draft_cursor = edit.len(field_text(item))
 			end
 			local verdict = view.STATUS[analysis.state][1]
 			log(state, "agent", item.name .. "：标记为 " .. analysis.pri .. "，" .. verdict)
 		end
+		if item.reanalyze then
+			-- More messages came in during this turn; it didn't see them.
+			item.reanalyze = nil
+			item.agent, item.thread, item.thread_for_agent = "queued", nil, nil
+		end
+		schedule_settled(state)
 		pump(state)
 		render(state)
 	end)
@@ -470,13 +490,14 @@ local function start(state: any, item: any)
 			return
 		end
 		local keys = if settings.get("agent_images") then feishu.images_in(item.content, 3) else {}
+		local image_message = item.latest_id or item.id
 		local waiting, paths = #keys, {}
 		if waiting == 0 then
 			analyze(state, item, paths)
 			return
 		end
 		for _, key in keys do
-			get_image(state, item.id, key, function(image)
+			get_image(state, image_message, key, function(image)
 				if image.path then
 					table.insert(paths, image.path)
 				end
@@ -489,13 +510,41 @@ local function start(state: any, item: any)
 	end)
 end
 
+local function settled(item: any): boolean
+	return not item.settle_at or item.settle_at <= os.time()
+end
+
+-- Wakes the queue when the next waiting chat has had its moment.
+schedule_settled = function(state: any)
+	local soonest: number? = nil
+	for _, item in state.items do
+		if item.agent == "queued" and item.settle_at and not settled(item) then
+			soonest = math.min(soonest or item.settle_at, item.settle_at)
+		end
+	end
+	if not soonest or state.settle_timer_at == soonest then
+		return
+	end
+	state.settle_timer_at = soonest
+	tern.timer(math.max(1, soonest - os.time() + 1) * 1000, function()
+		if state.settle_timer_at == soonest then
+			state.settle_timer_at = nil
+		end
+		if alive(state) then
+			schedule_settled(state)
+			pump(state)
+			render(state)
+		end
+	end)
+end
+
 pump = function(state: any)
 	while state.active < settings.get("concurrency") do
 		local chosen = current(state)
-		if not (chosen and chosen.agent == "queued" and not chosen.no_agent and (not chosen.triage or chosen.triage == "snoozed")) then
+		if not (chosen and chosen.agent == "queued" and not chosen.no_agent and settled(chosen) and (not chosen.triage or chosen.triage == "snoozed")) then
 			chosen = nil
 			for _, item in visible({ items = state.items, view = "pending" }) do
-				if item.agent == "queued" and not item.no_agent and not item.backlog then
+				if item.agent == "queued" and not item.triage and not item.no_agent and not item.backlog and settled(item) then
 					chosen = item
 					break
 				end
@@ -535,10 +584,94 @@ local function make_item(message: any): any
 	}
 end
 
+local function seconds_of(time: string): number?
+	local y, mo, d, h, mi, s = string.match(time, "^(%d+)-(%d+)-(%d+) (%d+):(%d+):?(%d*)")
+	if not y then
+		return nil
+	end
+	return os.time({
+		year = tonumber(y) :: number, month = tonumber(mo) :: number, day = tonumber(d) :: number,
+		hour = tonumber(h) :: number, min = tonumber(mi) :: number, sec = tonumber(s) or 0,
+	})
+end
+
+-- Only a sender's direct mentions in a group chain together. @所有人 is an announcement.
+local function chains(item: any): boolean
+	return item.chat_type ~= "p2p" and item.via == "@我" and item.sender_id ~= "" and not item.deleted
+end
+
+local function chain_key(item: any): string
+	return item.chat_id .. "\0" .. item.sender_id
+end
+
+-- Whether a newly found message continues `head`'s matter. Decisions restored for it
+-- only rebuild a chain that had the same outcome; they never change the outcome.
+local function continues(head: any, item: any): boolean
+	if item.triage and item.triage ~= head.triage then
+		return false
+	end
+	local from, to = seconds_of(head.time), seconds_of(item.time)
+	if not from or not to then
+		return false
+	end
+	local open = not head.triage or head.triage == "snoozed"
+	return math.abs(to - from) <= (if open then BURST_SECONDS else REPLY_BACK_SECONDS)
+end
+
+-- Folds a new message into its matter, which keeps its id: tasks, sessions and
+-- decisions hang off it. The judgment it had no longer covers everything that was
+-- said, so the matter comes back to you and goes round again.
+local function absorb(state: any, head: any, item: any)
+	table.insert(head.folded, item.id)
+	if item.time >= head.time then
+		head.latest_id, head.content, head.time, head.link, head.deleted = item.id, item.content, item.time, item.link, item.deleted
+		head.thread, head.thread_for_agent, head.thread_error = nil, nil, nil
+	end
+	if item.triage then
+		return
+	end
+	local was = head.triage
+	if was == "doing" then
+		-- Third-party words never go into a running task by themselves.
+		head.task_new = (head.task_new or 0) + 1
+		log(state, "agent", item.name .. "：omp 处理中又有新消息")
+		return
+	end
+	if was then
+		head.reopened = if was == "archived" then "归档后有新消息" elseif was == "snoozed" then nil else "你回复后有新消息"
+		head.triage, head.spoken, head.handoff_at, head.backlog = nil, nil, nil, false
+		record(all_ids(head), nil)
+		if state.undo and state.undo.id == head.id then
+			state.undo = nil
+		end
+		state.flash = item.name .. " 又 @ 了你，已放回需要我"
+		log(state, "agent", state.flash)
+	end
+	if head.agent == "running" then
+		head.reanalyze = true
+	elseif not (head.analysis and head.analysis.manual) then
+		head.agent, head.agent_error = "queued", nil
+		head.settle_at = (seconds_of(item.time) or os.time()) + SETTLE_SECONDS
+	end
+end
+
 local function merge(state: any, sources: { any })
 	local known: { [string]: any } = {}
+	local absorbed: { [string]: boolean } = {}
+	local heads: { [string]: any } = {}
 	for _, item in state.items do
 		known[item.id] = item
+		if item.chat_type ~= "p2p" then
+			for _, id in item.folded do
+				absorbed[id] = true
+			end
+		end
+		if chains(item) then
+			local key = chain_key(item)
+			if not heads[key] or item.time > heads[key].time then
+				heads[key] = item
+			end
+		end
 	end
 	local decided = decisions()
 	-- Oldest first, so a chat's newer message folds the older ones in.
@@ -569,9 +702,14 @@ local function merge(state: any, sources: { any })
 	local chats: { [string]: any } = {}
 	for _, entry in messages do
 		local id = entry.message.message_id
+		if absorbed[id] then
+			continue
+		end
 		local item = known[id]
+		local created = not item
 		if not item then
 			item = make_item(entry.message)
+			item.settle_at = (seconds_of(item.time) or os.time()) + SETTLE_SECONDS
 			known[id] = item
 			table.insert(state.items, item)
 			local decision = decided[id]
@@ -580,7 +718,9 @@ local function merge(state: any, sources: { any })
 				item.handoff_at = if decision.s == "handoff" then decision.t else nil
 			end
 		end
-		item.deleted = entry.message.deleted == true
+		if id == (item.latest_id or item.id) then
+			item.deleted = entry.message.deleted == true
+		end
 		local mentions_me = false
 		for _, m in (if type(entry.message.mentions) == "table" then entry.message.mentions else {}) do
 			mentions_me = mentions_me or (type(m) == "table" and m.id == state.me)
@@ -591,6 +731,16 @@ local function merge(state: any, sources: { any })
 		elseif item.via == "群聊" and not mentions_me and feishu.mentions_all(item.content) then
 			-- Found through another source, such as a starred sender's message.
 			item.via = "@所有人"
+		end
+		if created and chains(item) then
+			local key = chain_key(item)
+			local head = heads[key]
+			if head and head ~= item and continues(head, item) then
+				absorb(state, head, item)
+				item.superseded = true
+			else
+				heads[key] = item
+			end
 		end
 		if item.chat_type == "p2p" and not item.triage then
 			local older = chats[item.chat_id]
@@ -624,6 +774,7 @@ local function merge(state: any, sources: { any })
 		end
 	end
 	apply_rules(state)
+	schedule_settled(state)
 end
 
 -- Removes what a settled message left on disk, unless `u` could still reopen it.
@@ -914,6 +1065,7 @@ local function resolve(state: any, item: any, triage: string, verb: string)
 	local at = index_in(visible(state), item.id)
 	state.undo = { id = item.id, kind = "triage", previous = item.triage }
 	item.triage = triage
+	item.reopened, item.task_new = nil, nil
 	record(all_ids(item), triage)
 	state.flash = verb .. "：" .. item.name
 	log(state, "你", verb .. "：" .. item.name .. "（" .. item.chat .. "）")
@@ -971,6 +1123,7 @@ local function primary(state: any, item: any)
 	elseif action.key == "task" then
 		start_task(state, item, task_text(item))
 	elseif action.key == "jump" then
+		item.task_new = nil
 		state.cx:open(TASK_LINK .. item.id)
 	elseif action.key == "reopen" then
 		local task = runtime.task(item.id)
@@ -1154,7 +1307,7 @@ end
 
 -- Editing works without a draft too: you can always write the reply yourself.
 local function start_edit(state: any, item: any)
-	if view.locked(item) or item.agent == "running" or item.triage == "doing" then
+	if view.locked(item) or item.agent == "running" or item.triage == "doing" or view.stale(item) then
 		return
 	end
 	if not item.analysis then
@@ -1177,7 +1330,7 @@ local function force_analysis(state: any, item: any)
 		return
 	end
 	item.analysis = nil
-	item.force, item.no_agent, item.backlog, item.agent = true, false, false, "queued"
+	item.force, item.no_agent, item.backlog, item.agent, item.settle_at = true, false, false, "queued", nil
 	pump(state)
 end
 
@@ -1337,7 +1490,11 @@ local function act(state: any, name: string, value: string?, cx: any)
 			primary(state, item)
 		end
 	elseif name == "copy" then
-		copy_and_go(state, item)
+		if view.stale(item) then
+			state.flash = "有新消息，等新的判断出来再复制"
+		else
+			copy_and_go(state, item)
+		end
 	elseif name == "confirm-reply" and item.triage == "handoff" and item.spoken then
 		resolve(state, item, "replied", "已确认回复")
 	elseif name == "archive" then
@@ -1346,6 +1503,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 		end
 	elseif name == "omp" then
 		if item.triage == "doing" then
+			item.task_new = nil
 			state.cx:open(TASK_LINK .. item.id)
 		else
 			start_task(state, item, nil)
@@ -1366,11 +1524,11 @@ local function act(state: any, name: string, value: string?, cx: any)
 		end
 	elseif name == "redraft" then
 		if view.status(item) == "failed" then
-			item.agent = "queued"
+			item.agent, item.settle_at = "queued", nil
 			pump(state)
 		end
 	elseif name == "retry" then
-		item.agent = "queued"
+		item.agent, item.settle_at = "queued", nil
 		pump(state)
 	elseif name == "edit" then
 		start_edit(state, item)
