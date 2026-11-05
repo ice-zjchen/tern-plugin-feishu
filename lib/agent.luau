@@ -136,7 +136,7 @@ local function turn(prompt: string, resume: string?, images: { string }, notice:
 		table.insert(argv, "@" .. tern.plugin.data .. "/" .. path)
 	end
 	local started = pcall(function()
-		tern.process.run(argv, { cwd = launch.cwd, stdin = prompt, timeout_ms = TIMEOUT_MS }, function(result)
+		tern.process.run(argv, { cwd = launch.cwd, env = { PATH = runtime.path() }, stdin = prompt, timeout_ms = TIMEOUT_MS }, function(result)
 			if result.timed_out then
 				done(nil, resume, 0, "omp 超时（" .. tostring(TIMEOUT_MS // 1000) .. " 秒）。")
 				return

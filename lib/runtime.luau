@@ -45,6 +45,35 @@ function runtime.prepare(): any
 	return { cwd = cwd, config = path, sessions = tern.plugin.data .. "/sessions", warning = warning }
 end
 
+-- A GUI-started daemon's PATH is only /usr/bin:/bin:…, and omp's tools inherit it,
+-- so the model could not run lark-cli or node. The inherited PATH keeps precedence
+-- over the fallbacks; only the configured lark-cli's folder goes ahead of it.
+function runtime.path(): string
+	local dirs: { string } = {}
+	local seen = {}
+	local function add(dir: string?)
+		if dir and not seen[dir] and tern.fs.exists(dir) then
+			seen[dir] = true
+			table.insert(dirs, dir)
+		end
+	end
+	local cli = tern.kv.get("cli")
+	if type(cli) == "string" then
+		add(string.match(cli, "^(/.+)/[^/]+$"))
+	end
+	for dir in string.gmatch(tern.getenv("PATH") or "", "[^:]+") do
+		add(dir)
+	end
+	local home = tern.getenv("HOME")
+	if home then
+		add(home .. "/.local/share/fnm/aliases/default/bin")
+		add(home .. "/.local/bin")
+	end
+	add("/opt/homebrew/bin")
+	add("/usr/local/bin")
+	return table.concat(dirs, ":")
+end
+
 -- cx.agents:start accepts a command string, unlike process.run's argv.
 function runtime.quote(value: string): string
 	return "'" .. string.gsub(value, "'", "'\\''") .. "'"

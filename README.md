@@ -38,7 +38,7 @@ tern plugin link .
 
 打开命令面板运行 **飞书：打开工作台**，或按 **Ctrl+Alt+Shift+F**。
 
-从 Dock 启动的 Tern 不一定继承终端的 PATH。找不到命令时，用 **飞书：设置 lark-cli 路径** 和 **飞书：设置 omp 路径** 指定。npm 安装的 `lark-cli` 是依赖 `node` 的启动器，PATH 里没有 Node 时，指向 `<npm root -g 的输出>/@larksuite/cli/bin/lark-cli`。
+从 Dock 启动的 Tern 不一定继承终端的 PATH。找不到命令时，用 **飞书：设置 lark-cli 路径** 和 **飞书：设置 omp 路径** 指定。npm 安装的 `lark-cli` 是依赖 `node` 的启动器，PATH 里没有 Node 时，指向 `<npm root -g 的输出>/@larksuite/cli/bin/lark-cli`。自动分析和 `/` 对话启动 omp 时，会把该路径所在目录、fnm 默认 Node、`~/.local/bin`、Homebrew 目录补进 PATH，让 omp 的工具也能运行 `lark-cli` 和 `node`。
 
 ## 操作
 
