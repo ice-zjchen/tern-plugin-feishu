@@ -58,12 +58,13 @@
 	[data-role='fl.talk'] { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 	[data-role='fl.empty'] { padding: 24px 0; white-space: pre-wrap; }
 
-	[data-role='fl.context'] { flex: 1.08 1 1px; min-width: 0; min-height: 0; overflow: auto; padding: 24px 20px; border-left: 1px solid var(--fl-line); overscroll-behavior: contain; }
+	[data-role='fl.context'] { flex: 1.08 1 1px; min-width: 0; min-height: 0; overflow: hidden auto; padding: 24px 20px; border-left: 1px solid var(--fl-line); overscroll-behavior: contain; }
 	[data-role='fl.context'] > * { flex: 0 0 auto; min-width: 0; }
 	[data-role='fl.context.thread'] { flex: 0 0 auto; min-width: 0; }
 	[data-role='fl.context.thread'] > * { flex: 0 0 auto; min-width: 0; }
 	[data-role='fl.context.meta'] { white-space: pre-wrap; overflow-wrap: anywhere; }
 	[data-role='fl.context.why'] { padding-top: 16px; border-top: 1px solid var(--fl-line); }
+	[data-role='fl.run.step'] { line-height: 1.6; overflow-wrap: anywhere; }
 	[data-role='fl.context.text'] { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 	[data-role='fl.msg'], [data-role='fl.msg.hit'] { flex: 0 0 auto; min-width: 0; padding: 10px 12px; border-radius: 6px; }
 	[data-role='fl.msg.hit'] { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }

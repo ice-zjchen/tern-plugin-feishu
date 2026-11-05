@@ -299,6 +299,69 @@ local function folded(key: string, title: string, children: { any }): any
 	return node
 end
 
+local function short_path(path: string): string
+	local home = tern.getenv("HOME")
+	return if home and string.sub(path, 1, #home) == home then "~" .. string.sub(path, #home + 1) else path
+end
+
+local function kv_row(label: string, value: any): any
+	return { { t(label, "muted") }, if type(value) == "table" then value else { value } }
+end
+
+-- The record of the analysis behind this judgment. The title carries the summary, so
+-- the model and folder can be checked without opening it.
+local function run_block(item: any): any?
+	local run = item.run
+	if not run then
+		if not item.analysis or item.analysis.manual then
+			return nil
+		end
+		local model = settings.get("model")
+		local workspace = settings.get("workspace")
+		return folded("run", "分析记录 · 未记录", {
+			line({ t("这条的分析没有留下记录。下面是当前设置，不一定是当时用的。", "muted") }),
+			ui.kv({
+				kv_row("模型", if model ~= "" then model else "omp 默认"),
+				kv_row("Workspace", { t(if workspace ~= "" then workspace else "插件数据目录", "path") }),
+			}),
+		})
+	end
+	local steps, failed = #run.steps + (run.more_steps or 0), 0
+	for _, step in run.steps do
+		failed += if step.failed then 1 else 0
+	end
+	local folder = run.cwd and string.match(run.cwd, "([^/]+)/*$")
+	local summary = (run.model or "模型未知") .. " · " .. (folder or "目录未知") .. " · "
+		.. (if steps > 0 then tostring(steps) .. " 次工具" else "未调用工具")
+	local children: { any } = {}
+	if steps == 0 then
+		table.insert(children, line({ t("没有调用工具，直接根据消息判断。", "muted") }, { key = "no-steps" }))
+	end
+	for i, step in run.steps do
+		table.insert(children, line({
+			t(step.tool, "strong"),
+			if step.target then " " .. step.target else "",
+			if step.failed then t(" 失败", "warning") else "",
+		}, { key = "step_" .. tostring(i), role = "fl.run.step" }))
+	end
+	if (run.more_steps or 0) > 0 then
+		table.insert(children, line({ t("还有 " .. tostring(run.more_steps) .. " 次未列出", "muted") }, { key = "more" }))
+	end
+	local rows = {
+		kv_row("模型", (if run.provider then run.provider .. " / " else "") .. (run.model or "未知")),
+		kv_row("思考强度", if run.thinking and run.thinking ~= "default" then run.thinking else "omp 默认"),
+		kv_row("Workspace", { t(if run.cwd then short_path(run.cwd) else "未知", "path") }),
+		kv_row("Skills", if run.skills then { t(short_path(run.skills), "path") } else "沿用 omp 配置"),
+		kv_row("内容", if run.incremental then "沿用会话，只发送新消息" else "新会话，完整上下文"),
+		kv_row("时间", tostring(run.at or "未知") .. " · 用时 " .. tostring(run.seconds or 0) .. " 秒"),
+	}
+	if (run.cost or 0) > 0 then
+		table.insert(rows, kv_row("费用", string.format("$%.4f", run.cost)))
+	end
+	table.insert(children, ui.kv(rows))
+	return folded("run", "分析记录 · " .. summary .. (if failed > 0 then " · " .. tostring(failed) .. " 次失败" else ""), children)
+end
+
 local function why_of(item: any): string?
 	local a = item.analysis
 	return if a and not a.manual and a.why ~= "" then a.why else nil
@@ -532,6 +595,12 @@ local function right(state: any, facts: any, wide: boolean): any
 		local why = why_of(item)
 		if not wide and why and item.analysis.state ~= "fyi" then
 			table.insert(children, folded("why", "判断理由", { line(why, { role = "fl.context.text" }) }))
+		end
+		if not wide then
+			local record = run_block(item)
+			if record then
+				table.insert(children, record)
+			end
 		end
 		if item.analysis and item.analysis.state == "deep" and not item.triage and string.find(facts.reply_draft, "%S") then
 			table.insert(children, folded("quick-reply", "先回一句", {
@@ -844,6 +913,10 @@ function view.render(state: any, facts: any, cx: any): any
 				line({ t("判断理由", "strong") }),
 				line(why, { role = "fl.context.text" }),
 			}))
+		end
+		local record = run_block(facts.item)
+		if record then
+			table.insert(side, record)
 		end
 		table.insert(parts, ui.node("col", { key = "context", role = "fl.context", gap = "lg" }, side))
 	end

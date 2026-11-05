@@ -441,10 +441,11 @@ local function analyze(state: any, item: any, images: { string })
 	local read = item.thread_for_agent
 	local through = if read and #read > 0 then read[#read].id else nil
 	local had_session = item.session ~= nil
-	agent.analyze(item, extras(state, item), images, function(analysis, session, cost, err)
+	agent.analyze(item, extras(state, item), images, function(analysis, session, cost, err, run)
 		state.spent += cost
 		state.active -= 1
 		item.session = session or item.session
+		item.run = run or item.run
 		if not alive(state) then
 			return
 		end
@@ -1108,7 +1109,7 @@ local function start_task(state: any, item: any, task: string?)
 	item.task_state, item.task_raw, item.result = "starting", nil, nil
 	resolve(state, item, "doing", "已开 omp")
 	load_thread(state, item, function()
-		runtime.set_task(item.id, { prompt = agent.task_prompt(item, extras(state, item), task), state = "starting" })
+		runtime.set_task(item.id, { prompt = agent.task_prompt(item, feishu.clean, task), state = "starting" })
 		state.cx:open(TASK_LINK .. item.id)
 	end)
 end

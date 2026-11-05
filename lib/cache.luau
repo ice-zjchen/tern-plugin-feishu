@@ -9,7 +9,7 @@ local ITEM_FIELDS = {
 	"agent", "agent_error", "analysis", "session", "edited", "task_edited", "talk",
 	"thread", "thread_for_agent", "thread_error", "triage", "handoff_at", "spoken",
 	"task_state", "task_raw", "result", "backlog", "force",
-	"latest_id", "settle_at", "analyzed_through", "reopened", "task_new", "reanalyze",
+	"latest_id", "settle_at", "analyzed_through", "reopened", "task_new", "reanalyze", "run",
 }
 local STATE_FIELDS = {
 	"me", "view", "person", "selected", "spent", "log", "agenda", "agenda_error",

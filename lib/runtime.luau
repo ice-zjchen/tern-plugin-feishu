@@ -42,7 +42,10 @@ function runtime.prepare(): any
 	local path = tern.plugin.data .. "/omp-runtime.yml"
 	-- JSON is also valid YAML, including paths containing spaces and quotes.
 	tern.fs.write(path, tern.json.encode(config))
-	return { cwd = cwd, config = path, sessions = tern.plugin.data .. "/sessions", warning = warning }
+	return {
+		cwd = cwd, config = path, sessions = tern.plugin.data .. "/sessions", warning = warning,
+		skills = config.skills and config.skills.customDirectories[1],
+	}
 end
 
 -- A GUI-started daemon's PATH is only /usr/bin:/bin:…, and omp's tools inherit it,
