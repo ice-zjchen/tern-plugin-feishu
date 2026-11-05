@@ -131,8 +131,9 @@ local function turn(prompt: string, resume: string?, images: { string }, notice:
 		table.insert(argv, "--resume")
 		table.insert(argv, resume)
 	end
+	-- Images live under the plugin's data folder; omp runs in the workspace.
 	for _, path in images do
-		table.insert(argv, "@" .. path)
+		table.insert(argv, "@" .. tern.plugin.data .. "/" .. path)
 	end
 	local started = pcall(function()
 		tern.process.run(argv, { cwd = launch.cwd, stdin = prompt, timeout_ms = TIMEOUT_MS }, function(result)
