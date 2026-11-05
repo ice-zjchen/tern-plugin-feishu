@@ -330,7 +330,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 		item.thread = thread
 		item.thread_for_agent = {}
 		for _, message in thread do
-			table.insert(item.thread_for_agent, { sender = message.sender, time = message.time, content = feishu.clean(message.content) })
+			table.insert(item.thread_for_agent, { id = message.id, sender = message.sender, time = message.time, content = feishu.clean(message.content) })
 		end
 		local last = thread[#thread]
 		if messages and item.chat_type == "p2p" and last and last.mine and not item.triage then

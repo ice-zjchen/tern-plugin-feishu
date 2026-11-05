@@ -159,7 +159,15 @@ end
 
 local function context(item: any, extras: any): string
 	return tern.json.encode({
-		trigger = { sender = item.name, chat = item.chat, time = item.time, why = item.via, content = extras.clean(item.content) },
+		trigger = {
+			message_id = item.id,
+			chat_id = item.chat_id,
+			sender = item.name,
+			chat = item.chat,
+			time = item.time,
+			why = item.via,
+			content = extras.clean(item.content),
+		},
 		thread = item.thread_for_agent,
 		other_pending_messages = extras.others,
 		today_agenda = extras.agenda or "没有日程信息；不要假设用户的日程。",

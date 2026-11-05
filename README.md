@@ -98,7 +98,7 @@ tern plugin link .
 - 自动分析、`/` 和 `o` 均继承 omp 正常的项目指令（如 `AGENTS.md`）、规则、技能、扩展、MCP、工具及审批策略。插件不再限制内置工具、不禁用 MCP、不强制审批模式，也不添加自动批准参数。若项目策略要求交互确认，无头分析或对话可能被阻塞，应到原生 omp 继续，而不是绕过确认。
 - **Workspace 不是文件访问沙箱。** 读取到的项目或技能内容可能被发送给模型，包括被消息诱导读取的内容；只配置你愿意让模型访问的环境。
 
-插件任务提示词位于 `lib/agent.luau`：`WORKBENCH` 通过 `--append-system-prompt` 附加到默认系统提示词，不再替换它；`agent.analyze()` 将自动分析任务、消息上下文和 `ANALYSIS_FORMAT` 拼为本轮输入；`agent.converse()` 标识当前用户的直接请求并使用 `CHAT_FORMAT`。工具可以正常调用，最终输出保留工作台需要的 JSON。项目业务约定放在 Workspace 的 `AGENTS.md` 和各技能的 `SKILL.md` 中，不应只修改插件提示词来配置业务操作。
+插件任务提示词位于 `lib/agent.luau`：`WORKBENCH` 通过 `--append-system-prompt` 附加到默认系统提示词，不再替换它；`agent.analyze()` 将自动分析任务、消息上下文和 `ANALYSIS_FORMAT` 拼为本轮输入；`agent.converse()` 标识当前用户的直接请求并使用 `CHAT_FORMAT`，没有会话时同样附上消息上下文。消息上下文的 `trigger` 含 `message_id` 和 `chat_id`，`thread` 每条含 `id`，供技能精确查询；这些 ID 只是业务数据，不构成授权。工具可以正常调用，最终输出保留工作台需要的 JSON。项目业务约定放在 Workspace 的 `AGENTS.md` 和各技能的 `SKILL.md` 中，不应只修改插件提示词来配置业务操作。
 
 ## 和 omp 的关系
 
