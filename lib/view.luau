@@ -154,7 +154,15 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 		if item.chat_type ~= "p2p" then
 			table.insert(head, t(" " .. clip(item.chat, math.max(6, list_cells - width(item.name) - 12)), "muted"))
 		end
-		local label: { any } = { t(if item.id == state.selected then "▸ " else "  ", "accent") }
+		local label: { any } = { t(if item.id == state.selected then "▸" else " ", "accent") }
+		-- ● unread in Feishu, ? Feishu can't say, nothing once read.
+		if view.unread(item) then
+			table.insert(label, t("●", "accent"))
+		elseif item.is_read == nil and not view.settled(item) then
+			table.insert(label, t("?", "muted"))
+		else
+			table.insert(label, " ")
+		end
 		for _, span in head do
 			table.insert(label, span)
 		end
@@ -540,6 +548,15 @@ end
 function view.locked(item: any): boolean
 	local status = view.status(item)
 	return status == "sent" or status == "archived" or status == "sending" or status == "replied"
+end
+
+-- Whether a message is finished with. Its read state is no longer kept current.
+function view.settled(item: any): boolean
+	return item.triage == "sent" or item.triage == "archived" or item.triage == "replied"
+end
+
+function view.unread(item: any): boolean
+	return item.is_read == false and not view.settled(item)
 end
 
 -- What a queue row shows as its state.

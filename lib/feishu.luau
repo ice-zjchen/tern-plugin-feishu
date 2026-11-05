@@ -152,6 +152,41 @@ function feishu.chat_settings(chat_ids: { string }, done: (any, string?) -> ())
 	batch(1)
 end
 
+-- Whether the current user has read each message, fifty ids per request. A message
+-- the server can't determine is left out, and a failure keeps what came before it.
+function feishu.read_status(message_ids: { string }, done: ({ [string]: boolean }, string?) -> ())
+	local found = {}
+	local function batch(at: number)
+		if at > #message_ids then
+			done(found, nil)
+			return
+		end
+		local ids = {}
+		for i = at, math.min(at + 49, #message_ids) do
+			table.insert(ids, message_ids[i])
+		end
+		run({
+			"im", "+messages-read-status", "--as", "user", "--message-ids", table.concat(ids, ","), "--format", "json",
+		}, nil, function(data, err)
+			if err then
+				done(found, err)
+				return
+			end
+			if type(data) ~= "table" then
+				done(found, "已读状态响应格式不符合预期。请升级 lark-cli。")
+				return
+			end
+			for _, entry in (if type(data.items) == "table" then data.items else {}) do
+				if type(entry) == "table" and type(entry.message_id) == "string" and type(entry.is_read) == "boolean" then
+					found[entry.message_id] = entry.is_read
+				end
+			end
+			batch(at + 50)
+		end)
+	end
+	batch(1)
+end
+
 -- `count` messages of a chat, oldest first. With `until_time` (`YYYY-MM-DD
 -- HH:MM`, the search results' create_time) only those up to that minute.
 function feishu.history(chat_id: string, count: number, until_time: string?, done: ({ any }?, string?) -> ())

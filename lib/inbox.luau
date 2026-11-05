@@ -181,6 +181,10 @@ local function visible(state: any): { any }
 		if ra ~= rb then
 			return ra < rb
 		end
+		local ua, ub = view.unread(a), view.unread(b)
+		if ua ~= ub then
+			return ua
+		end
 		if a.time ~= b.time then
 			return a.time > b.time
 		end
@@ -575,12 +579,52 @@ end
 -- Removes what a settled message left on disk, unless `u` could still reopen it.
 local function prune(state: any)
 	for _, item in state.items do
-		local settled = item.triage == "sent" or item.triage == "archived" or item.triage == "replied"
-		if item.session and settled and not (state.undo and state.undo.id == item.id) then
+		if item.session and view.settled(item) and not (state.undo and state.undo.id == item.id) then
 			agent.forget(item.session)
 			item.session = nil
 		end
 	end
+end
+
+-- Feishu's read state, re-read on every refresh for what is still open. It only
+-- orders and marks the queue; reading a message in Feishu never settles it here.
+-- `is_read` stays nil when Feishu can't say, which doesn't count as read.
+local function sync_read(state: any, done: () -> ())
+	local open, ids = {}, {}
+	for _, item in state.items do
+		if not item.hidden and not view.settled(item) then
+			table.insert(open, item)
+			for _, id in all_ids(item) do
+				table.insert(ids, id)
+			end
+		end
+	end
+	if #ids == 0 then
+		done()
+		return
+	end
+	feishu.read_status(ids, function(found, err)
+		if not alive(state) then
+			return
+		end
+		if err then
+			local problem = "已读状态：" .. err
+			state.problem = if state.problem then state.problem .. "\n" .. problem else problem
+		end
+		for _, item in open do
+			local is_read: boolean? = true
+			for _, id in all_ids(item) do
+				if found[id] == false then
+					is_read = false
+					break
+				elseif found[id] == nil then
+					is_read = nil
+				end
+			end
+			item.is_read = is_read
+		end
+		done()
+	end)
 end
 
 local function refresh(state: any)
@@ -670,21 +714,24 @@ local function refresh(state: any)
 		state.me = me
 		local function after_agenda()
 			search_all(function()
-				state.loading = false
-				if not state.backlog_marked then
-					state.backlog_marked = true
-					for at, item in visible({ items = state.items, view = "pending" }) do
-						item.backlog = at > settings.get("backlog")
+				-- Before the backlog line is drawn, so unread messages get analyzed first.
+				sync_read(state, function()
+					state.loading = false
+					if not state.backlog_marked then
+						state.backlog_marked = true
+						for at, item in visible({ items = state.items, view = "pending" }) do
+							item.backlog = at > settings.get("backlog")
+						end
 					end
-				end
-				prune(state)
-				reselect(state, nil)
-				local item = current(state)
-				if item then
-					load_thread(state, item, function() end)
-				end
-				pump(state)
-				state.cx:render()
+					prune(state)
+					reselect(state, nil)
+					local item = current(state)
+					if item then
+						load_thread(state, item, function() end)
+					end
+					pump(state)
+					state.cx:render()
+				end)
 			end)
 		end
 		if not settings.get("use_agenda") then
