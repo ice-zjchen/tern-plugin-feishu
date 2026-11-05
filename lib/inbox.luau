@@ -1,33 +1,36 @@
--- The review workbench: a queue of Feishu messages omp has read ahead of you.
--- Nothing goes to Feishu until you approve it, and an approved reply waits the
--- configured delay so `u` can still take it back.
+-- The workbench: a queue of Feishu messages omp has judged ahead of you. Each one
+-- is to ignore, to reply to, or to work on, and `a` does whichever it is: archive,
+-- copy the reply and go to Feishu, or open a new omp tab. You send every reply
+-- yourself, and a tab only opens when you ask for it.
 --
--- Persisted: decisions (message id, outcome, time), settings, chat rules, stars.
--- Message text, drafts and analyses stay in memory. omp sessions and downloaded
--- images hold message content on disk under the plugin's data folder, so they go
--- when their message is settled and whenever this module loads.
+-- Messages, judgments, drafts and analysis-session ids are checkpointed locally.
+-- Reload restores the queue without refetching or replaying interrupted turns.
 
 local tern = require("tern")
 local edit = require("./edit")
 local feishu = require("./feishu")
 local agent = require("./agent")
+local runtime = require("./runtime")
 local settings = require("./settings")
 local view = require("./view")
+local cache = require("./cache")
 
 local DECISION_TTL = 30 * 86400
 local MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 local VIEWS = {
-	{ id = "pending", label = "待审核" },
-	{ id = "mention", label = "@我" },
-	{ id = "star", label = "★ 星标" },
-	{ id = "dm", label = "私聊" },
-	{ id = "fyi", label = "建议忽略" },
+	{ id = "pending", label = "待处理" },
+	{ id = "doing", label = "进行中" },
+	{ id = "fyi", label = "可忽略" },
 	{ id = "later", label = "稍后" },
 	{ id = "done", label = "已处理" },
+	{ id = "mention", label = "@我" },
+	{ id = "dm", label = "私聊" },
 }
 
-agent.clear_all()
+local TASK_POLL_MS = 3000
+local TASK_LINK = "tern-plugin-feishu://task/"
+
 
 local running: { [number]: any } = {}
 
@@ -56,6 +59,11 @@ local function log(state: any, who: string, text: string)
 	while #state.log > 100 do
 		table.remove(state.log)
 	end
+end
+
+local function render(state: any)
+	cache.save(state)
+	state.cx:render()
 end
 
 ----------------------------------------------------------------------------
@@ -147,6 +155,11 @@ local function shows(state: any, item: any): boolean
 	if item.hidden then
 		return false
 	end
+	if state.source == "mention" and not item.mention then
+		return false
+	elseif state.source == "dm" and item.chat_type ~= "p2p" then
+		return false
+	end
 	if state.person then
 		return item.sender_id == state.person and pending(item)
 	end
@@ -155,8 +168,8 @@ local function shows(state: any, item: any): boolean
 		return pending(item)
 	elseif v == "mention" then
 		return pending(item) and item.mention
-	elseif v == "star" then
-		return pending(item) and is_star(item.sender_id)
+	elseif v == "doing" then
+		return item.triage == "handoff" or item.triage == "doing"
 	elseif v == "dm" then
 		return pending(item) and item.chat_type == "p2p"
 	elseif v == "fyi" then
@@ -165,6 +178,12 @@ local function shows(state: any, item: any): boolean
 		return item.triage == "snoozed"
 	end
 	return item.triage == "sent" or item.triage == "archived" or item.triage == "replied"
+end
+
+-- The queue's sections: what to work on, what to answer, what isn't judged yet.
+local function group(item: any): number
+	local status = view.status(item)
+	return if status == "deep" then 1 elseif status == "reply" then 2 else 3
 end
 
 local function rank(item: any): number
@@ -179,6 +198,10 @@ local function visible(state: any): { any }
 		end
 	end
 	table.sort(shown, function(a, b)
+		local ga, gb = group(a), group(b)
+		if ga ~= gb then
+			return ga < gb
+		end
 		local ra, rb = rank(a), rank(b)
 		if ra ~= rb then
 			return ra < rb
@@ -209,12 +232,16 @@ local function current(state: any): any
 end
 
 local function draft_text(item: any): string
-	if item.edited then
-		return item.edited
-	end
-	local drafts = item.analysis and item.analysis.drafts or {}
-	local draft = drafts[item.variant]
-	return if draft then draft.text else ""
+	return item.edited or (item.analysis and item.analysis.draft) or ""
+end
+
+local function task_text(item: any): string
+	return item.task_edited or (item.analysis and item.analysis.task.prompt) or ""
+end
+
+-- The text the detail pane is showing for editing: a deep item's is its task.
+local function field_text(item: any): string
+	return if item.analysis and item.analysis.state == "deep" then task_text(item) else draft_text(item)
 end
 
 -- Keeps a selection in the visible queue, nearest to where it was.
@@ -227,7 +254,7 @@ local function reselect(state: any, near: number?)
 	end
 	local next_item = shown[math.clamp(near or 1, 1, math.max(1, #shown))]
 	state.selected = next_item and next_item.id
-	state.draft_cursor = edit.len(next_item and draft_text(next_item) or "")
+	state.draft_cursor = edit.len(next_item and field_text(next_item) or "")
 end
 
 local function index_in(shown: { any }, id: string?): number
@@ -266,6 +293,16 @@ local function get_image(state: any, message_id: string, key: string, done: (any
 		table.insert(image.waiters, done)
 		return
 	end
+	local cached_path = state.image_paths and state.image_paths[key]
+	if cached_path then
+		local ok, bytes = pcall(tern.fs.read, tern.plugin.data .. "/" .. cached_path, MAX_IMAGE_BYTES)
+		if ok then
+			image = { path = cached_path, settled = true, blob = state.cx:blob(bytes, mime_of(bytes)) }
+			state.images[key] = image
+			done(image)
+			return
+		end
+	end
 	image = { waiters = { done } }
 	state.images[key] = image
 	feishu.download_image(message_id, key, function(path, err)
@@ -284,7 +321,7 @@ local function get_image(state: any, message_id: string, key: string, done: (any
 		end
 		image.waiters = {}
 		if alive(state) then
-			state.cx:render()
+			render(state)
 		end
 	end)
 end
@@ -302,6 +339,9 @@ end
 -- the mention.
 local function load_thread(state: any, item: any, done: () -> ())
 	if item.thread then
+		for _, message in item.thread do
+			show_images_of(state, message)
+		end
 		done()
 		return
 	elseif item.thread_waiters then
@@ -351,7 +391,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 			for _, waiter in waiters do
 				waiter()
 			end
-			state.cx:render()
+			render(state)
 		end
 	end)
 end
@@ -375,7 +415,7 @@ local function extras(state: any, except: any): any
 				if warning then
 					log(state, "omp", warning)
 				end
-				state.cx:render()
+				render(state)
 			end
 		end,
 		others = others,
@@ -396,15 +436,15 @@ local function analyze(state: any, item: any, images: { string })
 			item.agent, item.agent_error = "failed", err
 			log(state, "agent", item.name .. "：分析失败")
 		else
-			item.agent, item.analysis, item.variant, item.agent_error = "done", analysis, 1, nil
+			item.agent, item.analysis, item.edited, item.task_edited, item.agent_error = "done", analysis, nil, nil, nil
 			if item.id == state.selected then
-				state.draft_cursor = edit.len(draft_text(item))
+				state.draft_cursor = edit.len(field_text(item))
 			end
 			local verdict = view.STATUS[analysis.state][1]
 			log(state, "agent", item.name .. "：标记为 " .. analysis.pri .. "，" .. verdict)
 		end
 		pump(state)
-		state.cx:render()
+		render(state)
 	end)
 end
 
@@ -412,6 +452,7 @@ local function start(state: any, item: any)
 	item.agent, item.agent_error = "running", nil
 	state.active += 1
 	log(state, "agent", item.name .. "：开始分析")
+	cache.save(state)
 	load_thread(state, item, function()
 		if not alive(state) then
 			state.active -= 1
@@ -486,7 +527,6 @@ local function make_item(message: any): any
 		via = if p2p then "私聊" else "群聊",
 		folded = {},
 		agent = "queued",
-		variant = 1,
 	}
 end
 
@@ -532,6 +572,7 @@ local function merge(state: any, sources: { any })
 			local decision = decided[id]
 			if type(decision) == "table" then
 				item.triage = decision.s
+				item.handoff_at = if decision.s == "handoff" then decision.t else nil
 			end
 		end
 		item.deleted = entry.message.deleted == true
@@ -573,8 +614,7 @@ local function merge(state: any, sources: { any })
 		if item.deleted and item.agent == "queued" then
 			item.agent = "done"
 			item.analysis = {
-				pri = "P3", state = "fyi", conf = 1, summary = "这条消息已撤回。", intent = "无", urgency = "无",
-				advice = "归档", evidence = {}, risk = "", drafts = {},
+				pri = "P3", state = "fyi", summary = "这条消息已撤回。", why = "", draft = "", task = { title = "", prompt = "" },
 			}
 		end
 	end
@@ -584,9 +624,14 @@ end
 -- Removes what a settled message left on disk, unless `u` could still reopen it.
 local function prune(state: any)
 	for _, item in state.items do
-		if item.session and view.settled(item) and not (state.undo and state.undo.id == item.id) then
-			agent.forget(item.session)
-			item.session = nil
+		if view.settled(item) and not (state.undo and state.undo.id == item.id) then
+			if item.session then
+				agent.forget(item.session)
+				item.session = nil
+			end
+			if runtime.task(item.id) then
+				runtime.set_task(item.id, nil)
+			end
 		end
 	end
 end
@@ -632,11 +677,85 @@ local function sync_read(state: any, done: () -> ())
 	end)
 end
 
+-- Whether you have spoken in the chat of a reply you took to Feishu. Any message of
+-- yours after the handoff counts, so the row names it and `u` can take it back.
+local function sync_replies(state: any)
+	for _, item in state.items do
+		if item.triage == "handoff" and state.me then
+			local since = os.date("%Y-%m-%d %H:%M", item.handoff_at or os.time()) :: string
+			feishu.search({ "--chat-id", item.chat_id, "--sender", state.me }, 1, function(data, err)
+				if err or not alive(state) or item.triage ~= "handoff" then
+					return
+				end
+				for _, message in data.messages do
+					if type(message) == "table" and not message.deleted and tostring(message.create_time or "") >= since then
+						local spoken = feishu.clean(tostring(message.content or ""))
+						if item.spoken ~= spoken then
+							item.spoken = spoken
+							state.flash = "检测到可能的回复，请确认：" .. spoken
+							log(state, "你", "可能已回复 " .. item.name .. "：" .. spoken)
+							render(state)
+						end
+						break
+					end
+				end
+			end)
+		end
+	end
+end
+
+-- Takes up what the window half recorded about each omp tab. A finished task that
+-- wrote a reply goes back to the queue with it as the draft.
+local function sync_tasks(state: any): boolean
+	local changed = false
+	for _, item in state.items do
+		if item.triage == "doing" then
+			local task = runtime.task(item.id)
+			local status = if task then task.state else "closed"
+			local result = if task and type(task.result) == "string" then task.result else nil
+			if status ~= item.task_state or result ~= item.task_raw then
+				changed = true
+				item.task_state, item.task_raw, item.result = status, result, result
+				if status == "done" then
+					local reply = result and string.match(result, "<reply>%s*(.-)%s*</reply>")
+					item.result = result and string.gsub(result, "%s*<reply>.-</reply>%s*", "\n")
+					if reply and reply ~= "" then
+						if not item.analysis then
+							item.agent = "done"
+							item.analysis = view.blank_analysis()
+						end
+						item.analysis.state, item.analysis.draft, item.edited = "reply", reply, nil
+						item.triage = nil
+						record(all_ids(item), nil)
+					end
+					state.flash = "omp 本轮结束，请确认结果：" .. item.name
+					log(state, "omp", "本轮结束：" .. item.name)
+					reselect(state, nil)
+				end
+			end
+		end
+	end
+	return changed
+end
+
+local function schedule_tasks(state: any)
+	tern.timer(TASK_POLL_MS, function()
+		if not alive(state) then
+			return
+		end
+		if sync_tasks(state) then
+			render(state)
+		end
+		schedule_tasks(state)
+	end)
+end
+
 local function refresh(state: any)
 	if state.loading or not alive(state) then
 		return
 	end
 	state.loading, state.problem = true, nil
+	state.last_refresh = os.time()
 
 	local function search_all(after: () -> ())
 		local sources = {}
@@ -713,7 +832,7 @@ local function refresh(state: any)
 		end
 		if err then
 			state.loading, state.problem = false, err
-			state.cx:render()
+			render(state)
 			return
 		end
 		state.me = me
@@ -722,6 +841,7 @@ local function refresh(state: any)
 				-- Before the backlog line is drawn, so unread messages get analyzed first.
 				sync_read(state, function()
 					state.loading = false
+					state.has_snapshot = state.problem == nil or #state.items > 0 or state.has_snapshot
 					if not state.backlog_marked then
 						state.backlog_marked = true
 						for at, item in visible({ items = state.items, view = "pending" }) do
@@ -729,13 +849,15 @@ local function refresh(state: any)
 						end
 					end
 					prune(state)
+					sync_replies(state)
+					sync_tasks(state)
 					reselect(state, nil)
 					local item = current(state)
 					if item then
 						load_thread(state, item, function() end)
 					end
 					pump(state)
-					state.cx:render()
+					render(state)
 				end)
 			end)
 		end
@@ -760,9 +882,7 @@ local function schedule_poll(state: any)
 			return
 		end
 		local minutes = settings.get("poll_minutes")
-		state.poll_elapsed = (state.poll_elapsed or 0) + 1
-		if minutes > 0 and state.poll_elapsed >= minutes then
-			state.poll_elapsed = 0
+		if minutes > 0 and os.time() - (state.last_refresh or os.time()) >= minutes * 60 then
 			refresh(state)
 		end
 		schedule_poll(state)
@@ -791,67 +911,69 @@ local function resolve(state: any, item: any, triage: string, verb: string)
 	reselect(state, at)
 end
 
-local function actually_send(state: any, item: any, text: string)
-	feishu.reply(item.id, text, function(_, err)
-		if err then
-			item.triage = nil
-			item.send_error = err
-			state.flash = "发送失败：" .. item.name
-			log(state, "你", "发送失败：" .. item.name)
-			if not state.mode then
-				state.selected = item.id
-				state.draft_cursor = edit.len(draft_text(item))
-			end
-			state.cx:toast("error", "飞书回复发送失败", err)
-		else
-			item.triage = "sent"
-			item.send_error = nil
-			record(all_ids(item), "sent")
-			state.flash = "已发送给 " .. item.name
-			log(state, "你", "已发送给 " .. item.name .. "（" .. item.chat .. "）")
-		end
-		if alive(state) then
-			reselect(state, nil)
-			state.cx:render()
-		end
+local function open_message(state: any, item: any)
+	local link = item.link
+	-- Never open a protocol a message could supply.
+	if type(link) == "string" and (
+		string.match(link, "^https://applink%.feishu%.cn/client/chat/open%?")
+		or string.match(link, "^https://applink%.larksuite%.com/client/chat/open%?")
+	) then
+		state.cx:open(link)
+	else
+		state.cx:toast("error", "该消息没有可用的原消息链接", item.id)
+	end
+end
+
+-- Puts the draft on the clipboard and goes to the chat; you send it there.
+local function copy_and_go(state: any, item: any)
+	local text = draft_text(item)
+	if string.find(text, "%S") then
+		state.cx:copy(text)
+	end
+	open_message(state, item)
+end
+
+local function hand_off(state: any, item: any)
+	copy_and_go(state, item)
+	if item.triage ~= "handoff" then
+		item.handoff_at = os.time()
+		resolve(state, item, "handoff", "已复制，去飞书发送")
+	end
+end
+
+-- Opens a new omp tab on this message. `task` is what you confirmed; nil opens it
+-- for you to drive.
+local function start_task(state: any, item: any, task: string?)
+	item.task_state, item.task_raw, item.result = "starting", nil, nil
+	resolve(state, item, "doing", "已开 omp")
+	load_thread(state, item, function()
+		runtime.set_task(item.id, { prompt = agent.task_prompt(item, extras(state, item), task), state = "starting" })
+		state.cx:open(TASK_LINK .. item.id)
 	end)
 end
 
-local function approve(state: any, item: any)
-	local status = view.status(item)
-	if not item.analysis or (status ~= "needs" and status ~= "ready" and status ~= "fyi" and status ~= "snoozed") then
-		return
-	end
-	local drafts = item.analysis and item.analysis.drafts or {}
-	if #drafts == 0 then
+-- What `a` does is what the row says it will.
+local function primary(state: any, item: any)
+	local action = view.next_action(item)
+	if action.key == "archive" then
 		resolve(state, item, "archived", "已归档")
-		return
-	end
-	local text = draft_text(item)
-	if not string.find(text, "%S") then
-		state.flash = "回复内容是空的，没有发送"
-		return
-	end
-	local at = index_in(visible(state), item.id)
-	local before = item.triage
-	item.triage = "sending"
-	item.send_error = nil
-	local pending_send = { id = item.id, kind = "send", previous = before }
-	state.undo = pending_send
-	local delay = settings.get("send_delay")
-	state.flash = tostring(delay) .. " 秒后发送给 " .. item.name
-	reselect(state, at)
-	-- If the block is gone when this fires, nothing is sent.
-	pending_send.timer = tern.timer(delay * 1000, function()
-		if state.undo == pending_send then
-			state.undo = nil
+	elseif action.key == "copy" then
+		hand_off(state, item)
+	elseif action.key == "task" then
+		start_task(state, item, task_text(item))
+	elseif action.key == "jump" then
+		state.cx:open(TASK_LINK .. item.id)
+	elseif action.key == "reopen" then
+		local task = runtime.task(item.id)
+		if task then
+			task.state = "starting"
+			runtime.set_task(item.id, task)
+			item.task_state = "starting"
+			state.cx:open(TASK_LINK .. item.id)
+		else
+			start_task(state, item, if item.analysis then task_text(item) else nil)
 		end
-		if pending_send.cancelled or not alive(state) then
-			return
-		end
-		actually_send(state, item, text)
-		state.cx:render()
-	end)
+	end
 end
 
 local function undo(state: any)
@@ -873,32 +995,18 @@ local function undo(state: any)
 	if not item then
 		return
 	end
-	if last.kind == "send" then
-		last.cancelled = true
-		if last.timer then
-			last.timer:cancel()
-		end
-		state.flash = "已取消发送：" .. item.name
-	else
-		record(all_ids(item), last.previous)
-		state.flash = "已撤销：" .. item.name
-		log(state, "你", "撤销了对 " .. item.name .. " 的操作")
-	end
+	record(all_ids(item), last.previous)
+	state.flash = "已撤销：" .. item.name
+	log(state, "你", "撤销了对 " .. item.name .. " 的操作")
 	item.triage = last.previous
+	-- Whatever was detected stays taken back: only what you say from now on counts.
+	item.spoken = nil
+	if last.previous == "handoff" then
+		item.handoff_at = os.time()
+	end
 	state.view, state.person = "pending", nil
 	state.selected = item.id
-	state.draft_cursor = edit.len(draft_text(item))
-end
-
-local function redraft(state: any, item: any)
-	local drafts = item.analysis and item.analysis.drafts or {}
-	if #drafts == 0 then
-		return
-	end
-	item.variant = (item.variant % #drafts) + 1
-	item.edited = nil
-	state.draft_cursor = edit.len(draft_text(item))
-	log(state, "agent", item.name .. "：切换到“" .. drafts[item.variant].label .. "”")
+	state.draft_cursor = edit.len(field_text(item))
 end
 
 -- A turn of conversation about the selected message, in its omp session.
@@ -918,8 +1026,14 @@ local function run_command(state: any)
 	table.insert(item.talk, { me = true, text = said })
 	state.flash = "omp 正在回答…"
 	log(state, "你", "对 omp 说：" .. said)
+	cache.save(state)
 	load_thread(state, item, function()
-		agent.converse(item, extras(state, item), draft_text(item), said, function(reply, draft, session, cost, err)
+		local current_judgment = {
+			decision = if item.analysis then item.analysis.state else "未判断",
+			draft = draft_text(item),
+			task = task_text(item),
+		}
+		agent.converse(item, extras(state, item), current_judgment, said, function(reply, change, session, cost, err)
 			state.spent += cost
 			state.talking = nil
 			item.session = session or item.session
@@ -933,38 +1047,29 @@ local function run_command(state: any)
 			else
 				table.insert(item.talk, { text = reply :: string })
 				state.flash = "omp 已回答"
-				if draft then
+				if change.state or change.draft or change.task then
 					if not item.analysis then
-						item.analysis = {
-							pri = "P2", state = "needs", conf = 0, summary = "", intent = "", urgency = "",
-							advice = "", evidence = {}, risk = "", drafts = {},
-						}
 						item.agent = "done"
+						item.analysis = view.blank_analysis()
 					end
-					table.insert(item.analysis.drafts, { label = "对话改写", text = draft })
-					item.variant, item.edited = #item.analysis.drafts, nil
+					local a = item.analysis
+					a.state = change.state or a.state
+					if change.draft then
+						a.draft, item.edited = change.draft, nil
+					end
+					if change.task then
+						a.task.prompt, item.task_edited = change.task, nil
+					end
 					if item.id == state.selected then
-						state.draft_cursor = edit.len(draft)
+						state.draft_cursor = edit.len(field_text(item))
 					end
-					state.flash = "omp 已更新回复"
+					state.flash = "omp 已更新判断"
+					reselect(state, nil)
 				end
 			end
-			state.cx:render()
+			render(state)
 		end)
 	end)
-end
-
-local function open_message(state: any, item: any)
-	local link = item.link
-	-- Never open a protocol a message could supply.
-	if type(link) == "string" and (
-		string.match(link, "^https://applink%.feishu%.cn/client/chat/open%?")
-		or string.match(link, "^https://applink%.larksuite%.com/client/chat/open%?")
-	) then
-		state.cx:open(link)
-	else
-		state.cx:toast("error", "该消息没有可用的原消息链接", item.id)
-	end
 end
 
 local function toggle_star(state: any, item: any)
@@ -989,7 +1094,7 @@ end
 local function select_item(state: any, id: string)
 	state.selected = id
 	local item = current(state)
-	state.draft_cursor = edit.len(if item then draft_text(item) else "")
+	state.draft_cursor = edit.len(if item then field_text(item) else "")
 	if item then
 		load_thread(state, item, function() end)
 	end
@@ -1018,30 +1123,33 @@ local function set_view(state: any, id: string?, person: string?)
 	pump(state)
 end
 
+local function set_source(state: any, source: string?)
+	if source ~= "all" and source ~= "mention" and source ~= "dm" then
+		return
+	end
+	state.source, state.person = source, nil
+	state.selected = nil
+	reselect(state, 1)
+	pump(state)
+end
+
 local function editable(item: any): boolean
-	return #(item.analysis and item.analysis.drafts or {}) > 0 and not view.locked(item)
+	return item.analysis ~= nil and not view.locked(item) and item.triage ~= "doing"
 end
 
 -- Editing works without a draft too: you can always write the reply yourself.
 local function start_edit(state: any, item: any)
-	if view.locked(item) or item.agent == "running" then
+	if view.locked(item) or item.agent == "running" or item.triage == "doing" then
 		return
 	end
 	if not item.analysis then
 		item.agent = "done"
-		item.analysis = {
-			pri = "P2", state = "needs", conf = 0, manual = true, summary = "", intent = "", urgency = "",
-			advice = "", evidence = {}, risk = "", drafts = {},
-		}
+		item.analysis = view.blank_analysis()
 	end
-	if #item.analysis.drafts == 0 then
-		table.insert(item.analysis.drafts, { label = "手写", text = "" })
-		item.variant = 1
-		if item.analysis.state == "fyi" then
-			item.analysis.state = "needs"
-		end
+	if item.analysis.state == "fyi" then
+		item.analysis.state = "reply"
 	end
-	state.draft_cursor = edit.len(draft_text(item))
+	state.draft_cursor = edit.len(field_text(item))
 	set_focus(state, "draft")
 end
 
@@ -1122,7 +1230,7 @@ end
 -- The block
 
 local function facts_of(state: any): any
-	local facts: any = { running = 0, ready = 0, fyi = 0, needs = 0, pending = 0 }
+	local facts: any = { running = 0, deep = 0, reply = 0, doing = 0, fyi = 0, pending = 0 }
 	local counts = {}
 	for _, def in VIEWS do
 		local n = 0
@@ -1136,9 +1244,12 @@ local function facts_of(state: any): any
 	for _, item in state.items do
 		local status = view.status(item)
 		facts.running += if status == "running" then 1 else 0
-		facts.ready += if status == "ready" then 1 else 0
-		facts.fyi += if status == "fyi" and not item.triage then 1 else 0
-		facts.needs += if status == "needs" then 1 else 0
+		if not item.hidden then
+			facts.deep += if status == "deep" then 1 else 0
+			facts.reply += if status == "reply" then 1 else 0
+			facts.doing += if item.triage == "handoff" or item.triage == "doing" then 1 else 0
+			facts.fyi += if status == "fyi" and not item.triage then 1 else 0
+		end
 		facts.pending += if pending(item) then 1 else 0
 	end
 	facts.views = {}
@@ -1154,7 +1265,8 @@ local function facts_of(state: any): any
 		table.insert(facts.people, { id = star.id, name = star.name, count = n })
 	end
 	facts.queue = visible(state)
-	facts.queue_label = "待审核"
+	facts.grouped = state.view == "pending" and not state.person
+	facts.queue_label = "待处理"
 	for _, def in VIEWS do
 		if def.id == state.view then
 			facts.queue_label = def.label
@@ -1168,7 +1280,8 @@ local function facts_of(state: any): any
 		end
 	end
 	facts.item = current(state)
-	facts.draft = if facts.item then draft_text(facts.item) else ""
+	facts.draft = if facts.item then field_text(facts.item) else ""
+	facts.reply_draft = if facts.item then draft_text(facts.item) else ""
 	return facts
 end
 
@@ -1176,6 +1289,11 @@ local function act(state: any, name: string, value: string?, cx: any)
 	local item = current(state)
 	if name == "view" then
 		set_view(state, value, nil)
+	elseif name == "source" then
+		set_source(state, value)
+	elseif name == "settings" then
+		if state.mode then set_focus(state, nil) end
+		state.page = if state.page == "settings" then nil else "settings"
 	elseif name == "person" then
 		set_view(state, nil, if state.person == value then nil else value)
 	elseif name == "refresh" then
@@ -1203,18 +1321,22 @@ local function act(state: any, name: string, value: string?, cx: any)
 		end
 	elseif not item then
 		return
-	elseif name == "approve" then
-		approve(state, item)
+	elseif name == "primary" then
+		primary(state, item)
+	elseif name == "copy" then
+		copy_and_go(state, item)
+	elseif name == "confirm-reply" and item.triage == "handoff" and item.spoken then
+		resolve(state, item, "replied", "已确认回复")
 	elseif name == "archive" then
 		if not view.locked(item) then
 			resolve(state, item, "archived", "已归档")
 		end
 	elseif name == "omp" then
-		if item.session then
-			cx:open("tern-plugin-feishu://omp/" .. item.session)
-			log(state, "你", "用 omp 打开：" .. item.name)
+		if item.triage == "doing" then
+			state.cx:open(TASK_LINK .. item.id)
 		else
-			state.flash = "这条还没有 omp 会话"
+			start_task(state, item, nil)
+			log(state, "你", "用 omp 打开：" .. item.name)
 		end
 	elseif name == "force" then
 		force_analysis(state, item)
@@ -1224,7 +1346,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 			state.undo = nil
 			record(all_ids(item), nil)
 			item.triage = nil
-			state.flash = "已移回待审核：" .. item.name
+			state.flash = "已移回待处理：" .. item.name
 			reselect(state, nil)
 		elseif not view.locked(item) then
 			resolve(state, item, "snoozed", "稍后处理")
@@ -1233,8 +1355,6 @@ local function act(state: any, name: string, value: string?, cx: any)
 		if view.status(item) == "failed" then
 			item.agent = "queued"
 			pump(state)
-		elseif editable(item) then
-			redraft(state, item)
 		end
 	elseif name == "retry" then
 		item.agent = "queued"
@@ -1243,12 +1363,6 @@ local function act(state: any, name: string, value: string?, cx: any)
 		start_edit(state, item)
 	elseif name == "open" then
 		open_message(state, item)
-	elseif name == "variant" then
-		local n = tonumber(value)
-		if n and editable(item) and item.analysis.drafts[n] then
-			item.variant, item.edited = n, nil
-			state.draft_cursor = edit.len(draft_text(item))
-		end
 	end
 end
 
@@ -1290,18 +1404,32 @@ local function key_in_field(state: any, key: any): boolean?
 		set_focus(state, nil)
 		return true
 	end
-	local field = { text = draft_text(item), cursor = state.draft_cursor }
+	local field = { text = field_text(item), cursor = state.draft_cursor }
 	local changed
 	if key.name == "enter" then
 		changed = edit.key(field, { name = "paste", text = "\n" })
 	else
 		changed = edit.key(field, key)
 	end
-	if field.text ~= draft_text(item) then
-		item.edited = field.text
+	if field.text ~= field_text(item) then
+		if item.analysis.state == "deep" then
+			item.task_edited = field.text
+		else
+			item.edited = field.text
+		end
 	end
 	state.draft_cursor = field.cursor
 	return changed
+end
+
+-- The view left open, unless this version no longer has it.
+local function view_from(saved: any): string
+	for _, def in VIEWS do
+		if type(saved) == "table" and saved.view == def.id then
+			return def.id
+		end
+	end
+	return "pending"
 end
 
 tern.block.define("inbox", {
@@ -1314,11 +1442,12 @@ tern.block.define("inbox", {
 			cx = cx,
 			items = {},
 			log = {},
-			view = if type(saved) == "table" and type(saved.view) == "string" then saved.view else "pending",
+			view = view_from(saved),
 			person = nil,
 			selected = nil,
 			active = 0,
 			spent = 0,
+			source = "all",
 			loading = false,
 			mode = nil,
 			command = "",
@@ -1329,8 +1458,34 @@ tern.block.define("inbox", {
 			field_cursor = 0,
 		}
 		running[cx.pane] = state
-		refresh(state)
+		if cache.restore(state) then
+			state.view = view_from(if type(saved) == "table" then saved else state)
+			if state.view == "mention" or state.view == "dm" then
+				state.source, state.view = state.view, "pending"
+			end
+			state.last_refresh = state.last_refresh or os.time()
+			apply_rules(state)
+			sync_tasks(state)
+			reselect(state, nil)
+			-- Recreate only local blob handles; no download or thread fetch on reload.
+			local item = current(state)
+			for _, message in (if settings.get("show_images") and item and item.thread then item.thread else {}) do
+				for _, key in feishu.images_in(message.content, 4) do
+					local path = state.image_paths[key]
+					if path then
+						local ok, bytes = pcall(tern.fs.read, tern.plugin.data .. "/" .. path, MAX_IMAGE_BYTES)
+						if ok then
+							state.images[key] = { path = path, settled = true, blob = cx:blob(bytes, mime_of(bytes)) }
+						end
+					end
+				end
+			end
+			cache.save(state)
+		else
+			refresh(state)
+		end
 		schedule_poll(state)
+		schedule_tasks(state)
 		return state
 	end,
 
@@ -1339,7 +1494,7 @@ tern.block.define("inbox", {
 		for _, item in state.items do
 			n += if pending(item) then 1 else 0
 		end
-		return if n > 0 then "飞书 · " .. tostring(n) .. " 待审核" else "飞书工作台"
+		return if n > 0 then "飞书 · " .. tostring(n) .. " 待处理" else "飞书工作台"
 	end,
 
 	view = function(state, cx)
@@ -1376,17 +1531,22 @@ tern.block.define("inbox", {
 				start_edit(state, current(state))
 			end
 		end
+		cache.save(state)
 	end,
 
 	key = function(state, key, cx)
 		if state.mode then
-			return key_in_field(state, key)
+			local handled = key_in_field(state, key)
+			cache.save(state)
+			return handled
 		end
 		if key.ctrl or key.meta or key.alt then
 			return false
 		end
 		if state.page == "settings" then
-			return key_in_settings(state, key)
+			local handled = key_in_settings(state, key)
+			cache.save(state)
+			return handled
 		end
 		local k = key.text or key.name
 		if key.name == "down" or k == "j" then
@@ -1394,11 +1554,13 @@ tern.block.define("inbox", {
 		elseif key.name == "up" or k == "k" then
 			move(state, -1)
 		elseif k == "a" then
-			act(state, "approve", nil, cx)
+			act(state, "primary", nil, cx)
 		elseif k == "e" then
 			act(state, "edit", nil, cx)
 		elseif k == "r" then
 			act(state, "redraft", nil, cx)
+		elseif k == "c" then
+			act(state, "copy", nil, cx)
 		elseif k == "s" then
 			act(state, "snooze", nil, cx)
 		elseif k == "x" then
@@ -1430,16 +1592,21 @@ tern.block.define("inbox", {
 			if item then
 				set_chat_rule(state, item, if k == "i" then "hide" else "manual")
 			end
-		elseif string.match(k, "^[1-7]$") then
+		elseif k == "6" or k == "7" then
+			local source = if k == "6" then "mention" else "dm"
+			set_source(state, if state.source == source then "all" else source)
+		elseif string.match(k, "^[1-5]$") then
 			set_view(state, VIEWS[tonumber(k) :: number].id, nil)
 		else
 			return false
 		end
+		cache.save(state)
 		return true
 	end,
 
-	-- Which view was open; never message text or drafts.
+	-- Also checkpoint at the host's lifecycle save boundary.
 	save = function(state)
+		cache.save(state)
 		return { view = state.view }
 	end,
 })

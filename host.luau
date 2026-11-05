@@ -104,7 +104,7 @@ local function fetch(state, cx, refresh)
 		end)
 	end)
 	if not started then
-		fail(state, cx, "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书：设置 lark-cli 路径」指定可执行文件；远程会话需在主机上配置。")
+		fail(state, cx, "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书 Feishu / Lark：设置 lark-cli 路径」指定可执行文件；远程会话需在主机上配置。")
 	end
 end
 

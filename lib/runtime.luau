@@ -74,6 +74,18 @@ function runtime.path(): string
 	return table.concat(dirs, ":")
 end
 
+-- A message's omp task, kept where both halves of the plugin can read it and
+-- where a reload can't lose it. One key each, so the halves never overwrite
+-- each other's tasks.
+function runtime.task(id: string): any
+	local stored = tern.kv.get("task:" .. id)
+	return if type(stored) == "table" then stored else nil
+end
+
+function runtime.set_task(id: string, task: any)
+	tern.kv.set("task:" .. id, task)
+end
+
 -- cx.agents:start accepts a command string, unlike process.run's argv.
 function runtime.quote(value: string): string
 	return "'" .. string.gsub(value, "'", "'\\''") .. "'"

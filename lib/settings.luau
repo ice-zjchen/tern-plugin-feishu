@@ -39,7 +39,6 @@ settings.FIELDS = {
 	{ id = "show_images", group = "run", kind = "switch", default = true, label = "显示图片", hint = "关闭后不下载，只显示 [图片]" },
 	{ id = "poll_minutes", group = "run", kind = "choice", default = 3, choices = { 0, 1, 3, 10, 30 }, label = "自动刷新（分钟）" },
 	{ id = "lookback_days", group = "run", kind = "choice", default = 2, choices = { 1, 2, 3, 7 }, label = "检索最近几天" },
-	{ id = "send_delay", group = "run", kind = "choice", default = 5, choices = { 3, 5, 10, 30 }, label = "发送前可撤销的秒数" },
 }
 
 local BY_ID = {}

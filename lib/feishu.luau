@@ -6,7 +6,7 @@ local tern = require("tern")
 local feishu = {}
 
 local ENV = { LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1" }
-local NOT_STARTED = "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书：设置 lark-cli 路径」指定可执行文件。"
+local NOT_STARTED = "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书 Feishu / Lark：设置 lark-cli 路径」指定可执行文件。"
 
 local function decode(text: string): any
 	local ok, value = pcall(tern.json.decode, text)
@@ -261,25 +261,6 @@ function feishu.download_image(message_id: string, key: string, done: (string?, 
 		local name = string.match(data.saved_path, "([^/\\]+)$")
 		done(if name then "images/" .. name else nil, nil)
 	end)
-end
-
--- A short hash, so one draft of one message can only be sent once.
-local function digest(text: string): string
-	local h = 5381
-	for i = 1, #text do
-		h = (h * 33 + string.byte(text, i)) % 4294967296
-	end
-	return string.format("%08x", h)
-end
-
--- Replies to a message as the user. The text goes through stdin: the CLI reads
--- a `--text` value starting with `@` as a file path, and drafts often start
--- with an @mention.
-function feishu.reply(message_id: string, text: string, done: (any, string?) -> ())
-	run({
-		"im", "+messages-reply", "--as", "user", "--message-id", message_id, "--text", "-",
-		"--idempotency-key", "fl" .. string.sub(message_id, -40) .. digest(text), "--format", "json",
-	}, { stdin = text }, done)
 end
 
 return feishu
