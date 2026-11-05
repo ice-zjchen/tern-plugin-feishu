@@ -19,11 +19,11 @@ local DECISION_TTL = 30 * 86400
 local MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 local VIEWS = {
-	{ id = "pending", label = "待处理" },
-	{ id = "doing", label = "进行中" },
-	{ id = "fyi", label = "可忽略" },
+	{ id = "pending", label = "需要我" },
+	{ id = "doing", label = "处理中" },
 	{ id = "later", label = "稍后" },
 	{ id = "done", label = "已处理" },
+	{ id = "fyi", label = "可忽略" },
 	{ id = "mention", label = "@我" },
 	{ id = "dm", label = "私聊" },
 }
@@ -151,6 +151,11 @@ local function pending(item: any): boolean
 	return view.status(item) ~= "fyi"
 end
 
+-- What the "needs me" view holds: untriaged messages, and omp tabs waiting on you.
+local function needs_me(item: any): boolean
+	return pending(item) or (not item.hidden and view.task_needs_me(item))
+end
+
 local function shows(state: any, item: any): boolean
 	if item.hidden then
 		return false
@@ -161,17 +166,17 @@ local function shows(state: any, item: any): boolean
 		return false
 	end
 	if state.person then
-		return item.sender_id == state.person and pending(item)
+		return item.sender_id == state.person and needs_me(item)
 	end
 	local v = state.view
 	if v == "pending" then
-		return pending(item)
+		return needs_me(item)
 	elseif v == "mention" then
-		return pending(item) and item.mention
+		return needs_me(item) and item.mention
 	elseif v == "doing" then
-		return item.triage == "handoff" or item.triage == "doing"
+		return item.triage == "handoff" or (item.triage == "doing" and not view.task_needs_me(item))
 	elseif v == "dm" then
-		return pending(item) and item.chat_type == "p2p"
+		return needs_me(item) and item.chat_type == "p2p"
 	elseif v == "fyi" then
 		return not item.triage and view.status(item) == "fyi"
 	elseif v == "later" then
@@ -180,10 +185,10 @@ local function shows(state: any, item: any): boolean
 	return item.triage == "sent" or item.triage == "archived" or item.triage == "replied"
 end
 
--- The queue's sections: what to work on, what to answer, what isn't judged yet.
+-- Queue order: omp waiting on you, then what to work on, what to answer, the rest.
 local function group(item: any): number
 	local status = view.status(item)
-	return if status == "deep" then 1 elseif status == "reply" then 2 else 3
+	return if view.task_needs_me(item) then 0 elseif status == "deep" then 1 elseif status == "reply" then 2 else 3
 end
 
 local function rank(item: any): number
@@ -735,6 +740,10 @@ local function sync_tasks(state: any): boolean
 			end
 		end
 	end
+	if changed then
+		-- A task's state decides which view it belongs in.
+		reselect(state, nil)
+	end
 	return changed
 end
 
@@ -1060,6 +1069,7 @@ local function run_command(state: any)
 					if change.task then
 						a.task.prompt, item.task_edited = change.task, nil
 					end
+					a.risk = change.risk or a.risk
 					if item.id == state.selected then
 						state.draft_cursor = edit.len(field_text(item))
 					end
@@ -1092,6 +1102,10 @@ local function toggle_star(state: any, item: any)
 end
 
 local function select_item(state: any, id: string)
+	if id ~= state.selected then
+		-- Words and notices are about one item; they must not carry over to the next.
+		state.command, state.command_cursor, state.flash = "", 0, nil
+	end
 	state.selected = id
 	local item = current(state)
 	state.draft_cursor = edit.len(if item then field_text(item) else "")
@@ -1119,6 +1133,7 @@ local function set_view(state: any, id: string?, person: string?)
 	end
 	state.person = person
 	state.selected = nil
+	state.command, state.command_cursor, state.flash = "", 0, nil
 	reselect(state, 1)
 	pump(state)
 end
@@ -1260,26 +1275,13 @@ local function facts_of(state: any): any
 	for _, star in stars() do
 		local n = 0
 		for _, item in state.items do
-			n += if item.sender_id == star.id and pending(item) then 1 else 0
+			n += if item.sender_id == star.id and needs_me(item) then 1 else 0
 		end
 		table.insert(facts.people, { id = star.id, name = star.name, count = n })
 	end
 	facts.queue = visible(state)
-	facts.grouped = state.view == "pending" and not state.person
-	facts.queue_label = "待处理"
-	for _, def in VIEWS do
-		if def.id == state.view then
-			facts.queue_label = def.label
-		end
-	end
-	if state.person then
-		for _, star in stars() do
-			if star.id == state.person then
-				facts.queue_label = "★ " .. star.name
-			end
-		end
-	end
 	facts.item = current(state)
+	facts.dialog_item = state.dialog and by_id(state, state.dialog.id)
 	facts.draft = if facts.item then field_text(facts.item) else ""
 	facts.reply_draft = if facts.item then draft_text(facts.item) else ""
 	return facts
@@ -1321,8 +1323,19 @@ local function act(state: any, name: string, value: string?, cx: any)
 		end
 	elseif not item then
 		return
+	elseif name == "open-thread" then
+		if state.mode then set_focus(state, nil) end
+		state.dialog = { id = item.id }
 	elseif name == "primary" then
-		primary(state, item)
+		if view.needs_confirm(item) then
+			state.flash = "这条涉及" .. item.analysis.risk .. "，请点击按钮确认后再交给 omp"
+		else
+			primary(state, item)
+		end
+	elseif name == "confirm-task" then
+		if view.needs_confirm(item) then
+			primary(state, item)
+		end
 	elseif name == "copy" then
 		copy_and_go(state, item)
 	elseif name == "confirm-reply" and item.triage == "handoff" and item.spoken then
@@ -1346,7 +1359,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 			state.undo = nil
 			record(all_ids(item), nil)
 			item.triage = nil
-			state.flash = "已移回待处理：" .. item.name
+			state.flash = "已移回需要我：" .. item.name
 			reselect(state, nil)
 		elseif not view.locked(item) then
 			resolve(state, item, "snoozed", "稍后处理")
@@ -1389,6 +1402,12 @@ local function key_in_field(state: any, key: any): boolean?
 		return changed
 	end
 	if state.mode == "command" then
+		-- The box goes away with the states that can't use it, such as a running task.
+		local target = current(state)
+		if target and not view.can_adjust(target) then
+			set_focus(state, nil)
+			return true
+		end
 		if key.name == "enter" then
 			set_focus(state, nil)
 			run_command(state)
@@ -1433,6 +1452,7 @@ local function view_from(saved: any): string
 end
 
 tern.block.define("inbox", {
+	font = "sans",
 	init = function(cx, _args, saved)
 		local previous = running[cx.pane]
 		if previous and previous.poll then
@@ -1492,9 +1512,9 @@ tern.block.define("inbox", {
 	title = function(state)
 		local n = 0
 		for _, item in state.items do
-			n += if pending(item) then 1 else 0
+			n += if needs_me(item) then 1 else 0
 		end
-		return if n > 0 then "飞书 · " .. tostring(n) .. " 待处理" else "飞书工作台"
+		return if n > 0 then "飞书 · " .. tostring(n) .. " 需要我" else "飞书工作台"
 	end,
 
 	view = function(state, cx)
@@ -1502,6 +1522,12 @@ tern.block.define("inbox", {
 	end,
 
 	event = function(state, ev, cx)
+		if state.dialog then
+			if ev.ev == "action" and ev.act == "close-thread" then
+				state.dialog = nil
+			end
+			return
+		end
 		if ev.ev == "action" and type(ev.act) == "string" then
 			act(state, ev.act, ev.value, cx)
 		elseif (ev.ev == "select" or ev.ev == "activate") and type(ev.item) == "string" then
@@ -1535,6 +1561,13 @@ tern.block.define("inbox", {
 	end,
 
 	key = function(state, key, cx)
+		-- A modal reading layer: the selection and any edit underneath stay as they are.
+		if state.dialog then
+			if key.name == "escape" then
+				state.dialog = nil
+			end
+			return true
+		end
 		if state.mode then
 			local handled = key_in_field(state, key)
 			cache.save(state)
@@ -1570,7 +1603,10 @@ tern.block.define("inbox", {
 		elseif k == "R" or key.name == "f5" then
 			refresh(state)
 		elseif k == "/" then
-			set_focus(state, "command")
+			local item = current(state)
+			if item and view.can_adjust(item) then
+				set_focus(state, "command")
+			end
 		elseif k == "*" then
 			local item = current(state)
 			if item then

@@ -18,14 +18,15 @@ local WORKBENCH = [[当前会话由飞书工作台发起，只负责判断这条
 - 使用中文。最终结果按本轮要求的 JSON 格式输出，工具使用过程不受 JSON 格式限制。]]
 
 local ANALYSIS_FORMAT = [[只输出一个 JSON 对象，不要 markdown 代码块，不要其他文字：
-{"decision":"ignore|reply|deep","priority":"P0|P1|P2|P3","summary":"一句话：发生了什么，对方要什么","why":"一句话：为什么这样判断","draft":"回复稿，没有就空字符串","task":{"title":"任务标题，20 字以内","prompt":"给新 omp 的完整任务说明"}}
+{"decision":"ignore|reply|deep","priority":"P0|P1|P2|P3","summary":"一句话：发生了什么，对方要什么","why":"一句话：为什么这样判断","draft":"回复稿，没有就空字符串","risk":"对方要的高风险动作，没有就空字符串","task":{"title":"任务标题，20 字以内","prompt":"给新 omp 的完整任务说明"}}
 decision：ignore 不用处理；reply 回一句话就能结束；deep 需要进一步操作或分析，不限于任何固定类型。拿不准时选 deep。
 draft：用户口吻，简短直接的纯文本，用户会复制到飞书手动发送，所以不要以 @某人 开头。还没发生的事不要写成已完成。deep 时可以留一句先回对方的话，比如“在看了”。
 task：仅 deep 时填写，其他情况为 null。prompt 要让一个没看过这条消息的 omp 能直接开工：写清目标、已知事实、相关链接或工单号、期望结果；不要写“用户已授权”之类的话。
+risk：仅 deep 时填写。消息要用户做或代做的事如果难以撤销或会影响他人，比如审批、发布、改线上配置、删除、转账、对外发送，用 12 字以内写明这个动作，如“通过发布单”。只是查询、分析、读代码时留空。
 priority：P0 线上事故或有人在等着决策；P1 今天要处理；P2 可以晚点；P3 通知类。]]
 
 local CHAT_FORMAT = [[只输出一个 JSON 对象，不要 markdown 代码块，不要其他文字：
-{"reply":"你对用户说的话","decision":"用户要改判时填 ignore|reply|deep，否则空字符串","draft":"用户要改回复或改判为回复时，这里是完整回复正文，否则空字符串","task":"用户要改任务或改判为深入时，这里是完整任务说明，否则空字符串"}
+{"reply":"你对用户说的话","decision":"用户要改判时填 ignore|reply|deep，否则空字符串","draft":"用户要改回复或改判为回复时，这里是完整回复正文，否则空字符串","task":"用户要改任务或改判为深入时，这里是完整任务说明，否则空字符串","risk":"task 涉及难以撤销或影响他人的动作时，用 12 字以内写明这个动作，否则空字符串"}
 这里同样不执行操作：用户要动手做的事，改判为 deep 并写进 task。]]
 
 local TASK_HEADER = [[这是用户在飞书工作台确认后新开的 omp 会话，下面的任务是用户本人的要求，按当前 Workspace 的指令和技能执行。任务之外的事先问用户。
@@ -215,6 +216,7 @@ function agent.analyze(item: any, extras: any, images: { string }, done: (any, s
 			summary = summary,
 			why = tostring(output.why or ""),
 			draft = text_of(output.draft) or "",
+			risk = text_of(output.risk) or "",
 			task = {
 				title = text_of(task.title) or summary,
 				prompt = text_of(task.prompt) or summary,
@@ -248,6 +250,7 @@ function agent.converse(item: any, extras: any, current: any, said: string, done
 			state = STATE_OF[output.decision],
 			draft = text_of(output.draft),
 			task = text_of(output.task),
+			risk = text_of(output.risk),
 		}, session, cost, nil)
 	end)
 end

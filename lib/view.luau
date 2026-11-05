@@ -8,7 +8,7 @@ local ui = tern.ui
 local view = {}
 
 view.DRAFT_ID = "main.body.right.reply.draft"
-view.COMMAND_ID = "main.body.right.correction.field"
+view.COMMAND_ID = "main.body.right.reply.correction.input.field"
 view.QUEUE_PREFIX = "main.body.middle.queue.items."
 
 view.STATUS = {
@@ -16,15 +16,15 @@ view.STATUS = {
 	manual = { "不交给 agent", "muted" },
 	running = { "分析中", "info" },
 	failed = { "分析失败", "warning" },
-	deep = { "要深入", "warning strong" },
-	reply = { "要回复", "info strong" },
+	deep = { "待交办", "muted" },
+	reply = { "待回复", "muted" },
 	fyi = { "可忽略", "muted" },
 	snoozed = { "稍后", "muted" },
 	handoff = { "待你发送", "accent" },
-	task_starting = { "omp 启动中", "info" },
-	task_working = { "omp 执行中", "info" },
-	task_waiting = { "omp 等你", "warning strong" },
-	task_done = { "本轮结束 / 待确认", "accent" },
+	task_starting = { "omp 启动中", "muted" },
+	task_working = { "omp 执行中", "muted" },
+	task_waiting = { "omp 等你", "warning" },
+	task_done = { "本轮结束 / 待确认", "warning" },
 	task_closed = { "tab 已关闭", "warning" },
 	sent = { "已发送", "muted" },
 	archived = { "已归档", "muted" },
@@ -35,6 +35,9 @@ view.STATUS = {
 function view.blank_analysis(): any
 	return { pri = "P2", state = "reply", manual = true, summary = "", why = "", draft = "", task = { title = "", prompt = "" } }
 end
+
+-- How many messages the side column shows before the rest move to the modal.
+local INLINE_MESSAGES = 4
 
 local function t(text: string, token: string?): any
 	return ui.span(text, token)
@@ -92,7 +95,7 @@ end
 local function nav_strip(state: any, facts: any): any
 	local tabs = {}
 	for _, def in facts.views do
-		if def.id == "pending" or def.id == "doing" or def.id == "fyi" or def.id == "later" or def.id == "done" then
+		if def.id == "pending" or def.id == "doing" or def.id == "later" or def.id == "done" then
 			table.insert(tabs, nav(def.id, "view=" .. def.id, def.label, def.count, state.page ~= "settings" and not state.person and state.view == def.id))
 		end
 	end
@@ -113,53 +116,51 @@ local function source_strip(state: any): any
 	return ui.node("row", { key = "sources", role = "fl.sources", gap = "xs", wrap = true }, sources)
 end
 
--- Which section of the pending queue a row belongs to.
-local function section_of(item: any): string
-	local status = view.status(item)
-	return if status == "deep" then "要深入" elseif status == "reply" then "要回复" else "待判断"
+
+local function queue_foot(state: any, facts: any): any?
+	local count = 0
+	for _, def in facts.views do
+		if def.id == "fyi" then
+			count = def.count
+		end
+	end
+	if state.view == "fyi" and not state.person then
+		return ui.node("row", { key = "quiet", role = "fl.queue.foot", justify = "between", gap = "sm" }, {
+			line({ t("正在看可忽略的消息", "muted") }),
+			ui.button("返回", { key = "back", size = "sm", variant = "quiet", actions = { click = "view=pending" } }),
+		})
+	elseif count == 0 then
+		return nil
+	end
+	return ui.node("row", { key = "quiet", role = "fl.queue.foot", justify = "between", gap = "sm" }, {
+		line({ t("可忽略 " .. tostring(count) .. " 条", "muted") }),
+		ui.button("查看", { key = "show", size = "sm", variant = "quiet", actions = { click = "view=fyi" } }),
+	})
 end
 
 local function queue_block(state: any, facts: any, list_cells: number): any
 	local items = {}
-	local section: string? = nil
-	local counts: { [string]: number } = {}
-	if facts.grouped then
-		for _, item in facts.queue do
-			local group = section_of(item)
-			counts[group] = (counts[group] or 0) + 1
-		end
-	end
 	for _, item in facts.queue do
-		if facts.grouped and section_of(item) ~= section then
-			section = section_of(item)
-			local token = if section == "要深入" then "warning strong" elseif section == "要回复" then "info strong" else "muted strong"
-			table.insert(items, ui.node("item", {
-				key = "section_" .. tostring(section),
-				role = "fl.queue.section",
-				label = { t((section :: string) .. " · " .. tostring(counts[section :: string]), token) },
-			}))
-		end
 		local status = view.STATUS[view.status(item)]
 		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else feishu.clean(item.content)
-		local label: { any } = { t(item.name, "strong"), t(" " .. clip(if item.chat_type == "p2p" then "私聊" else item.chat, math.max(6, list_cells - width(item.name) - 10)), "muted") }
+		local where = if item.chat_type == "p2p" then "私聊" else item.chat
+		local label: { any } = {
+			clip(summary, math.max(6, list_cells - 6)) .. "\n",
+			t(clip(item.name .. " · " .. where, math.max(6, list_cells - width(status[1]) - 4)), "muted"),
+		}
 		if view.unread(item) then
 			table.insert(label, t(" ●", "accent"))
 		elseif item.is_read == nil and not view.settled(item) then
 			table.insert(label, t(" ?", "muted"))
 		end
-		table.insert(label, "\n" .. clip(summary, list_cells) .. "\n")
-		table.insert(label, t((if item.analysis then item.analysis.pri .. "  " else "") .. status[1], status[2]))
-		if item.via and item.via ~= "" then
-			table.insert(label, t("  " .. item.via, "muted"))
-		end
 		table.insert(items, ui.node("item", {
 			key = item.id,
 			role = "fl.queue.message",
 			label = label,
-			value = { t(string.sub(item.time, -5), "muted") },
+			value = { t(string.sub(item.time, -5), "muted"), "\n", t(status[1], status[2]) },
 		}))
 	end
-	return ui.node("col", { key = "queue", role = "fl.queue.panel", grow = 1, gap = "none" }, {
+	local children: { any } = {
 		ui.node("list", {
 			key = "items",
 			role = "fl.queue",
@@ -168,7 +169,12 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 			max = 1,
 			grow = 1,
 		}, items),
-	})
+	}
+	local foot = queue_foot(state, facts)
+	if foot then
+		table.insert(children, foot)
+	end
+	return ui.node("col", { key = "queue", role = "fl.queue.panel", grow = 1, gap = "none" }, children)
 end
 
 -- A message's pictures; click one to zoom. Nothing while images are off.
@@ -189,25 +195,58 @@ local function images_of(state: any, message: any): any
 	return ui.node("col", { key = "images", gap = "xs" }, nodes)
 end
 
-local function thread_block(state: any, item: any): any
-	local messages = {
-		ui.node("row", { key = "head", role = "fl.context.head", justify = "between", gap = "sm", wrap = true }, {
-			line({ t("原消息", "muted strong") }),
-			ui.button("在飞书打开", { key = "open", size = "sm", variant = "quiet", actions = { click = "open" } }),
+local function thread_of(item: any): { any }
+	return item.thread or { { sender = item.name, time = item.time, content = item.content, id = item.id } }
+end
+
+local function message_node(state: any, key: string, message: any, hit: boolean): any
+	return ui.node("col", { key = key, role = if hit then "fl.msg.hit" else "fl.msg", gap = "xs" }, {
+		ui.node("row", { justify = "between", gap = "sm", wrap = true }, {
+			line({ t(message.sender, "strong") }),
+			line({ t(string.sub(tostring(message.time), -5), "muted") }),
 		}),
-		line({ t(item.chat, "muted") }, { role = "fl.context.meta" }),
-	}
-	local thread = item.thread or { { sender = item.name, time = item.time, content = item.content, id = item.id } }
+		line(if message.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(message.content)), { role = "fl.msg.text" }),
+		images_of(state, message),
+	})
+end
+
+-- The most recent messages, always including the one that put this item in the queue.
+local function thread_window(thread: { any }, item: any): (number, number)
+	local total, hit = #thread, #thread
 	for i, message in thread do
-		local hit = message.id == item.id
-		table.insert(messages, ui.node("col", { key = "msg_" .. tostring(i), role = if hit then "fl.msg.hit" else "fl.msg", gap = "xs" }, {
-			ui.node("row", { justify = "between", gap = "sm", wrap = true }, {
-				line({ t(message.sender, "strong") }),
-				line({ t(tostring(message.time), "muted") }),
-			}),
-			line(if message.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(message.content))),
-			images_of(state, message),
-		}))
+		if message.id == item.id then
+			hit = i
+		end
+	end
+	local first = math.max(1, total - INLINE_MESSAGES + 1)
+	if hit < first then
+		return hit, math.min(total, hit + INLINE_MESSAGES - 1)
+	end
+	return first, total
+end
+
+local function thread_scope(item: any): string
+	return (if item.chat_type == "p2p" then "私聊" else item.chat) .. " · 触发消息及其上下文"
+end
+
+-- The conversation itself, readable beside the plan. Only a long one needs the modal.
+local function thread_block(state: any, item: any): any
+	local thread = thread_of(item)
+	local first, last = thread_window(thread, item)
+	local actions: { any } = {}
+	if last - first + 1 < #thread then
+		table.insert(actions, ui.button("全部 " .. tostring(#thread) .. " 条", { key = "all", size = "sm", variant = "quiet", actions = { click = "open-thread" } }))
+	end
+	table.insert(actions, ui.button("在飞书打开", { key = "open", size = "sm", variant = "quiet", actions = { click = "open" } }))
+	local messages: { any } = {
+		ui.node("row", { key = "head", role = "fl.context.head", justify = "between", gap = "sm", wrap = true }, {
+			line({ t("原始对话", "strong") }),
+			ui.node("row", { key = "actions", gap = "xs" }, actions),
+		}),
+		line({ t(thread_scope(item), "muted") }, { role = "fl.context.meta" }),
+	}
+	for i = first, last do
+		table.insert(messages, message_node(state, "msg_" .. tostring(i), thread[i], thread[i].id == item.id))
 	end
 	if item.thread_error then
 		table.insert(messages, line({ t("未能读取会话上下文：" .. item.thread_error, "muted") }))
@@ -215,26 +254,78 @@ local function thread_block(state: any, item: any): any
 	return ui.node("col", { key = "thread", role = "fl.context.thread", gap = "sm" }, messages)
 end
 
+-- Without the side column, what was asked stays on screen: never hand off blind.
+local function quote_block(state: any, item: any): any
+	local children: { any } = {
+		line(if item.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(item.content)), { key = "text", role = "fl.msg.text" }),
+		images_of(state, item),
+	}
+	local actions: { any } = {}
+	local count = #thread_of(item)
+	if count > 1 then
+		table.insert(actions, ui.button("查看全部 " .. tostring(count) .. " 条对话", { key = "all", size = "sm", variant = "quiet", actions = { click = "open-thread" } }))
+	end
+	table.insert(actions, ui.button("在飞书打开", { key = "open", size = "sm", variant = "quiet", actions = { click = "open" } }))
+	table.insert(children, ui.node("row", { key = "actions", gap = "xs", wrap = true }, actions))
+	return ui.node("col", { key = "quote", role = "fl.quote", gap = "xs" }, children)
+end
+
+local function thread_dialog(state: any, item: any): any
+	local children: { any } = {
+		ui.button("关闭", { key = "close", variant = "quiet", keys = { "esc" }, actions = { click = "close-thread" } }),
+		line({ t(thread_scope(item) .. " · " .. tostring(#thread_of(item)) .. " 条", "muted") }, { key = "scope" }),
+	}
+	for i, message in thread_of(item) do
+		table.insert(children, message_node(state, "msg_" .. tostring(i), message, message.id == item.id))
+	end
+	return ui.col({ ui.node("overlay", {
+		key = "thread", head = "原始对话", meta = { t(item.name .. " · " .. item.chat, "muted") }, size = "lg", modal = true,
+		["end"] = "layer.thread.close",
+	}, children) })
+end
+
+local function folded(key: string, title: string, children: { any }): any
+	local node = ui.section(title, children)
+	node.p = node.p or {}
+	node.p.key = key
+	node.p.collapsed = true
+	node.p.collapsible = true
+	return node
+end
+
+local function why_of(item: any): string?
+	local a = item.analysis
+	return if a and not a.manual and a.why ~= "" then a.why else nil
+end
+
 local function analysis_block(state: any, item: any): any
 	local a = item.analysis
 	local status = view.status(item)
-	local verdict = view.STATUS[status]
-	local meta: { any } = { t(verdict[1], verdict[2]) }
-	if a then
-		table.insert(meta, "  " .. a.pri)
+	local where = if item.chat_type == "p2p" then "私聊" else item.chat
+	local byline = (if a and not a.manual then a.pri .. " · " else "") .. item.name .. " · " .. where .. " · " .. string.sub(item.time, -5)
+	if item.sender_type ~= "user" then
+		byline ..= " · " .. (if item.sender_type == "bot" then "机器人" else "身份未知")
 	end
-	local sender_label = if item.sender_type == "bot" then "机器人" elseif item.sender_type == "user" then "用户" else "身份未知"
-	table.insert(meta, t("  " .. sender_label, "muted"))
-	table.insert(meta, t("  " .. item.name .. " · " .. (if item.chat_type == "p2p" then "私聊" else item.chat) .. " · " .. item.time, "muted"))
+	if item.via and item.via ~= "" then
+		byline ..= " · " .. item.via
+	end
+	local tools: { any } = {}
+	if status ~= "task_starting" and status ~= "task_working" and not view.locked(item) then
+		table.insert(tools, ui.button(if status == "snoozed" then "移回需要我" else "稍后", { key = "snooze", size = "sm", variant = "quiet", keys = { "s" }, actions = { click = "snooze" } }))
+		if view.next_action(item).key ~= "archive" and status ~= "task_done" then
+			table.insert(tools, ui.button("归档", { key = "archive", size = "sm", variant = "quiet", keys = { "x" }, actions = { click = "archive" } }))
+		end
+	end
 	local title = if a and not a.manual and a.summary ~= "" then a.summary else feishu.clean(item.content)
 	local children: { any } = {
-		line(meta, { key = "meta", role = "fl.summary.meta" }),
 		line({ t(title, "strong") }, { key = "title", role = "fl.summary.title" }),
+		ui.node("row", { key = "top", justify = "between", gap = "md", wrap = true }, {
+			line({ t(byline, "muted") }, { key = "meta", role = "fl.summary.meta" }),
+			ui.node("row", { key = "tools", gap = "xs" }, tools),
+		}),
 	}
 	if a and a.manual then
-		table.insert(children, line({ t("这条由你处理，omp 没有判断过。按 g 交给 omp。", "muted") }))
-	elseif a and a.why ~= "" then
-		table.insert(children, line({ t(a.why, "muted") }, { key = "why", role = "fl.summary.why" }))
+		table.insert(children, line({ t("这条由你处理，omp 没有判断过。", "muted") }))
 	elseif status == "failed" then
 		table.insert(children, line({ t("分析失败：" .. tostring(item.agent_error), "warning") }))
 		table.insert(children, ui.node("row", { key = "retry" }, {
@@ -242,54 +333,125 @@ local function analysis_block(state: any, item: any): any
 		}))
 	elseif status == "running" then
 		table.insert(children, line({ t("正在判断这条消息…", "info") }))
-	elseif not a then
-		local why = if status == "manual" then "按设置，这条不交给 agent。按 g 分析，或按 e 手写回复。"
-			elseif not settings.get("agent_enabled") then "自动分析已关闭。按 g 分析，或按 e 手写回复。"
-			elseif item.triage then "已保留处理状态；当前没有这条消息的分析。"
+	elseif not a and not item.triage then
+		local why = if status == "manual" then "按设置，这条不交给 agent。"
+			elseif not settings.get("agent_enabled") then "自动分析已关闭。"
 			else "这条消息还没有分析，选中后会排队。"
 		table.insert(children, line({ t(why, "muted") }))
 	end
 	return ui.node("col", { key = "analysis", role = "fl.summary", gap = "sm" }, children)
 end
 
+-- Talks to the analysis session, which can change the judgment, the draft and the task.
+-- It cannot reach a running omp tab, so those states don't offer it.
+local function correction(state: any, kind: string?): any
+	local label = if kind == "deep" then "让 omp 改判断或任务说明，不会启动任务"
+		elseif kind == "reply" then "让 omp 改这条回复或判断"
+		else "让 omp 调整判断"
+	local placeholder = if kind == "reply" then "例如：语气正式一点；或者这条要深入处理" else "例如：不用深入，回一句就行"
+	return ui.node("col", { key = "correction", role = "fl.correction", gap = "sm" }, {
+		line({ t(label, "muted") }),
+		ui.node("row", { key = "input", role = "fl.correction.row", gap = "sm" }, {
+			ui.node("input", {
+				key = "field", role = "fl.command", text = state.command, cursor = state.command_cursor,
+				readonly = state.mode ~= "command", placeholder = placeholder,
+			}),
+			ui.button("发送", { key = "run", variant = "quiet", actions = { click = "run-command" }, busy = state.talking ~= nil }),
+		}),
+	})
+end
+
+local function primary_button(item: any, variant: string): any
+	local action = view.next_action(item)
+	local props: any = { key = "primary", role = "fl.primary", variant = variant, actions = { click = "primary" }, disabled = action.key == "none" }
+	if view.needs_confirm(item) then
+		-- No shortcut on purpose: a stray `a` must not start this one.
+		props.actions = { click = "confirm-task" }
+		return ui.button("确认，交给 omp", props)
+	end
+	props.keys = { "a" }
+	return ui.button(action.label, props)
+end
+
+local function task_card(state: any, item: any, facts: any): any
+	local status = view.status(item)
+	local children: { any } = {}
+	local function head(title: string)
+		table.insert(children, line({ t(title, "strong") }, { key = "head", role = "fl.task.title" }))
+	end
+	local function buttons(...)
+		table.insert(children, ui.node("row", { key = "actions", role = "fl.actions", gap = "sm", wrap = true }, { ... }))
+	end
+	if status == "task_done" then
+		head("omp 本轮结果 · 请核对")
+		table.insert(children, line({ t("这是 omp 的原话。本轮结束不代表任务完成。", "muted") }))
+		if item.result and string.find(item.result, "%S") then
+			table.insert(children, line(item.result, { key = "result", role = "fl.result" }))
+		else
+			table.insert(children, line({ t("omp 没有留下文字结果，请到 tab 里查看。", "muted") }))
+		end
+		buttons(
+			primary_button(item, "primary"),
+			ui.button("确认完成并归档", { key = "archive", variant = "quiet", keys = { "x" }, actions = { click = "archive" } })
+		)
+	elseif status == "task_waiting" then
+		head("omp 在等你")
+		table.insert(children, line("它的问题在 omp tab 里，回答也在那里进行。"))
+		buttons(primary_button(item, "primary"))
+	elseif status == "task_closed" then
+		head("omp tab 已关闭")
+		table.insert(children, line("任务可能没做完。可以重新打开，或者确认后归档。"))
+		buttons(primary_button(item, "primary"))
+	else
+		head(if status == "task_starting" then "omp 启动中" else "omp 正在处理")
+		table.insert(children, line("不需要留在这里等待。omp 等你，或本轮结束时，这条会回到「需要我」。"))
+		table.insert(children, line({ t("要补充要求，到 omp tab 里说。这里的内容到不了正在运行的任务。", "muted") }))
+		buttons(primary_button(item, "quiet"))
+	end
+	if status ~= "task_done" and item.analysis and item.analysis.state == "deep" and string.find(facts.draft, "%S") then
+		table.insert(children, folded("scope", "已交办的任务", { line(facts.draft, { role = "fl.plan" }) }))
+	end
+	return ui.node("col", { key = "reply", role = "fl.task", gap = "md" }, children)
+end
+
 local function next_block(state: any, item: any, facts: any): any
+	if item.triage == "doing" then
+		return task_card(state, item, facts)
+	end
 	local status = view.status(item)
 	local locked = view.locked(item)
-	local doing = item.triage == "doing"
 	local kind = item.analysis and item.analysis.state
-	local title = if doing then "omp 任务" elseif kind == "deep" then "给 omp 的任务" elseif kind == "reply" then "回复稿" else "下一步"
-	local children: { any } = {
-		ui.node("row", { key = "head", gap = "sm", wrap = true }, {
-			line({ t(title, "strong") }),
-			line({ t(if doing then "在新 tab 中处理" elseif kind == "deep" then "确认后在新 tab 运行，可以先改" elseif kind == "reply" then "复制后在飞书发送，可以先改" else "", "muted") }),
-		}),
-	}
-	if doing then
-		local says = if status == "task_waiting" then "omp 正在等你确认，按 a 跳过去。"
-			elseif status == "task_done" then "本轮已结束，不代表任务已成功完成。请检查结果，确认完成后再归档。"
-			elseif status == "task_closed" then "tab 已关闭，任务可能没做完。按 a 重新开 omp。"
-			else "omp 正在新 tab 里处理。按 a 跳过去。"
-		table.insert(children, line({ t(says, "muted") }))
-	elseif kind == "deep" or kind == "reply" then
+	local editable = kind == "deep" or kind == "reply"
+	local title = if locked then view.STATUS[status][1]
+		elseif kind == "deep" then "交给 omp 处理"
+		elseif kind == "reply" then (if status == "handoff" then "待你发送" else "回复给 " .. item.name)
+		else "下一步"
+	local children: { any } = { line({ t(title, "strong") }, { key = "head", role = "fl.task.title" }) }
+	if editable and not locked then
 		-- Keep this direct child: inbox callbacks focus main.body.right.reply.draft.
 		table.insert(children, ui.node("editor", {
 			key = "draft", role = "fl.draft", text = facts.draft, cursor = state.draft_cursor,
-			readonly = locked or state.mode ~= "draft", maxLines = 7,
+			readonly = state.mode ~= "draft", maxLines = 7,
 			placeholder = if kind == "deep" then "任务说明" else "回复内容",
 		}))
-		if kind == "deep" and string.find(facts.reply_draft, "%S") then
-			table.insert(children, ui.node("row", { key = "quick-reply", role = "fl.quick.reply", gap = "sm", wrap = true }, {
-				line({ t("可以先回对方：", "muted"), facts.reply_draft }),
-				ui.button("复制", { key = "copy", size = "sm", keys = { "c" }, actions = { click = "copy" } }),
-			}))
+	elseif locked then
+		if string.find(facts.draft, "%S") then
+			table.insert(children, line(facts.draft, { key = "draft-text", role = "fl.plan" }))
 		end
 	else
 		local why = if status == "running" or status == "queued" then "判断完成后，这里会出现下一步。"
-			elseif status == "failed" then "可以重试分析，或按 e 手写回复。"
-			elseif status == "manual" then "按 e 手写回复。"
-			elseif kind == "fyi" then "这条不用处理。需要回复时按 e 手写。"
-			else view.STATUS[status][1]
+			elseif status == "failed" then "可以重试分析，或者自己手写回复。"
+			elseif kind == "fyi" then why_of(item) or "这条不用处理。"
+			else "可以自己手写回复。"
 		table.insert(children, line({ t(why, "muted") }))
+	end
+	if kind == "deep" and not locked and view.needs_confirm(item) then
+		table.insert(children, ui.node("col", { key = "risk", role = "fl.risk", gap = "xs" }, {
+			line({ t("对方要的动作：", "warning"), t(item.analysis.risk, "warning strong") }),
+			line({ t("上面的要求只是任务说明，不是权限限制。omp 按项目配置运行，有权限时可能真的执行。", "muted") }),
+		}))
+	elseif kind == "deep" and not locked then
+		table.insert(children, line({ t("确认后在新 tab 运行，开始前可以先改。", "muted") }))
 	end
 	if item.spoken then
 		table.insert(children, line({
@@ -302,39 +464,30 @@ local function next_block(state: any, item: any, facts: any): any
 			}))
 		end
 	end
-	local action = view.next_action(item)
-	local buttons: { any } = {
-		ui.button(action.label, { key = "primary", variant = "primary", keys = { "a" }, actions = { click = "primary" }, disabled = action.key == "none" }),
-		ui.button("修改", { key = "edit", keys = { "e" }, actions = { click = "edit" }, disabled = locked or doing or status == "running" }),
-		ui.button("稍后", { key = "snooze", keys = { "s" }, actions = { click = "snooze" }, disabled = locked }),
-		ui.button(if status == "task_done" then "确认完成并归档" else "归档", { key = "archive", keys = { "x" }, actions = { click = "archive" }, disabled = locked }),
-		ui.button("在飞书打开", { key = "open", keys = { "⏎" }, actions = { click = "open" } }),
-		ui.button("直接开 omp", { key = "omp", title = "不管判断如何，直接开 omp 处理这条消息", keys = { "o" }, actions = { click = "omp" } }),
-	}
-	table.insert(children, ui.node("row", { key = "actions", role = "fl.actions", gap = "sm", wrap = true }, buttons))
-	return ui.node("col", { key = "reply", role = if kind == "deep" then "fl.task.deep" else "fl.task", gap = "md" }, children)
-end
-
-local function correction(state: any): any
-	return ui.node("col", { key = "correction", role = "fl.correction", gap = "sm" }, {
-		line({ t("判断不对？直接告诉 omp  /", "muted") }),
-		ui.node("input", {
-			key = "field", role = "fl.command", text = state.command, cursor = state.command_cursor,
-			readonly = state.mode ~= "command",
-			placeholder = "不用深入，回一句就行；或补充任务要求",
-		}),
-		ui.node("row", { key = "actions", justify = "end", hidden = state.mode ~= "command" and state.command == "" }, {
-			ui.button("发送", { key = "run", size = "sm", actions = { click = "run-command" }, busy = state.talking ~= nil }),
-		}),
-	})
+	if not locked then
+		local buttons: { any } = {}
+		if view.next_action(item).key ~= "none" then
+			table.insert(buttons, primary_button(item, "primary"))
+		end
+		if status ~= "running" then
+			table.insert(buttons, ui.button(if kind == "deep" then "修改要求" elseif editable then "修改" else "手写回复", { key = "edit", variant = "quiet", keys = { "e" }, actions = { click = "edit" } }))
+		end
+		if not editable then
+			if status == "manual" or (item.analysis and item.analysis.manual) then
+				table.insert(buttons, ui.button("交给 omp 分析", { key = "force", variant = "quiet", keys = { "g" }, actions = { click = "force" } }))
+			end
+			table.insert(buttons, ui.button("直接开 omp", { key = "omp", variant = "quiet", keys = { "o" }, title = "不管判断如何，直接开 omp 处理这条消息", actions = { click = "omp" } }))
+		end
+		table.insert(children, ui.node("row", { key = "actions", role = "fl.actions", gap = "sm", wrap = true }, buttons))
+	end
+	if view.can_adjust(item) then
+		table.insert(children, correction(state, kind))
+	end
+	return ui.node("col", { key = "reply", role = "fl.task", gap = "md" }, children)
 end
 
 local function conversation(state: any, item: any): any
 	local children = {}
-	if item.result and string.find(item.result, "%S") then
-		table.insert(children, line({ t("omp 本轮结果 · 请核对", "muted strong") }))
-		table.insert(children, line(item.result, { role = "fl.talk" }))
-	end
 	for _, entry in item.talk or {} do
 		table.insert(children, line({
 			t(if entry.me then "你  " else "omp  ", if entry.me then "accent" else "info"), entry.text,
@@ -351,12 +504,21 @@ local function right(state: any, facts: any, wide: boolean): any
 	local children = {}
 	if item then
 		table.insert(children, analysis_block(state, item))
-		table.insert(children, next_block(state, item, facts))
-		table.insert(children, correction(state))
-		table.insert(children, conversation(state, item))
 		if not wide then
-			table.insert(children, thread_block(state, item))
+			table.insert(children, quote_block(state, item))
 		end
+		table.insert(children, next_block(state, item, facts))
+		local why = why_of(item)
+		if not wide and why and item.analysis.state ~= "fyi" then
+			table.insert(children, folded("why", "判断理由", { line(why, { role = "fl.context.text" }) }))
+		end
+		if item.analysis and item.analysis.state == "deep" and not item.triage and string.find(facts.reply_draft, "%S") then
+			table.insert(children, folded("quick-reply", "先回一句", {
+				line(facts.reply_draft, { role = "fl.quick.reply" }),
+				ui.button("复制回复", { key = "copy", size = "sm", variant = "quiet", keys = { "c" }, actions = { click = "copy" } }),
+			}))
+		end
+		table.insert(children, conversation(state, item))
 	else
 		table.insert(children, line({ t("选择队列里的一条消息，查看判断和下一步。", "muted") }, { role = "fl.empty" }))
 	end
@@ -375,7 +537,7 @@ local function header(state: any, facts: any): any
 					key = "refresh", size = "sm", actions = { click = "refresh" }, busy = state.loading, disabled = state.loading,
 				}),
 				ui.button(if state.page == "settings" then "返回工作台" else "设置", {
-					key = "settings", size = "sm", keys = { "," }, actions = { click = "settings" },
+					key = "settings", size = "sm", actions = { click = "settings" },
 				}),
 			}),
 		}),
@@ -391,12 +553,14 @@ local function header(state: any, facts: any): any
 	return ui.node("col", { key = "head", gap = "none" }, lines)
 end
 
-local KEYS = { "j/k 上下", "a 下一步", "e 修改", "/ 改判", "o omp", "6 @我", "7 私聊" }
+local KEYS = { "j/k 上下", "a 下一步", "o omp", "6 @我", "7 私聊" }
+local ADJUST_KEYS = { "j/k 上下", "a 下一步", "e 修改", "/ 让 omp 调整", "o omp", "6 @我", "7 私聊" }
 local SETTINGS_KEYS = { "j/k 上下", "空格 切换", "←/→ 换值", "Esc 返回" }
 
-local function dock(state: any, narrow: boolean): any
+local function dock(state: any, facts: any, narrow: boolean): any
 	local hints = {}
-	for _, hint in (if state.page == "settings" then SETTINGS_KEYS elseif narrow then { "j/k 上下", "a 下一步", "/ 改判" } else KEYS) do
+	local adjustable = facts.item ~= nil and view.can_adjust(facts.item)
+	for _, hint in (if state.page == "settings" then SETTINGS_KEYS elseif narrow then { "j/k 上下", "a 下一步" } elseif adjustable then ADJUST_KEYS else KEYS) do
 		local k, label = string.match(hint, "^(%S+) (.+)$")
 		table.insert(hints, t(k :: string, "strong"))
 		table.insert(hints, t(" " .. (label :: string) .. "   ", "muted"))
@@ -534,6 +698,22 @@ function view.unread(item: any): boolean
 	return item.is_read == false and not view.settled(item)
 end
 
+-- A running omp tab that needs you back: it asked something, finished or was closed.
+function view.task_needs_me(item: any): boolean
+	return item.triage == "doing" and (item.task_state == "waiting" or item.task_state == "done" or item.task_state == "closed")
+end
+
+-- A request with a hard-to-undo action only starts from the button, never from `a`.
+function view.needs_confirm(item: any): boolean
+	local a = item.analysis
+	return not view.locked(item) and item.triage ~= "doing" and a ~= nil and a.state == "deep" and type(a.risk) == "string" and string.find(a.risk, "%S") ~= nil
+end
+
+-- The adjust box talks to the analysis session, which can't reach a task in a tab.
+function view.can_adjust(item: any): boolean
+	return not view.locked(item) and item.triage ~= "doing"
+end
+
 -- What a queue row shows as its state.
 function view.status(item: any): string
 	if item.triage == "doing" then
@@ -556,9 +736,11 @@ end
 function view.next_action(item: any): { key: string, label: string }
 	local status = view.status(item)
 	if status == "task_done" then
-		return { key = "archive", label = "确认完成并归档" }
+		return { key = "jump", label = "继续到 omp" }
 	elseif status == "task_closed" then
 		return { key = "reopen", label = "重新开 omp" }
+	elseif status == "task_waiting" then
+		return { key = "jump", label = "到 omp 回答" }
 	elseif item.triage == "doing" then
 		return { key = "jump", label = "跳到 omp" }
 	elseif status == "handoff" then
@@ -568,7 +750,7 @@ function view.next_action(item: any): { key: string, label: string }
 	end
 	local kind = item.analysis.state
 	if kind == "deep" then
-		return { key = "task", label = "开 omp 去处理" }
+		return { key = "task", label = "交给 omp" }
 	elseif kind == "fyi" then
 		return { key = "archive", label = "归档" }
 	end
@@ -576,32 +758,43 @@ function view.next_action(item: any): { key: string, label: string }
 	return { key = "copy", label = if string.find(draft, "%S") then "复制并去回复" else "去飞书回复" }
 end
 
+-- Three columns only when none has to be squeezed; below that the conversation folds away.
+local WIDE_COLS = 170
+local WIDE_MEDIUM = 110
+
 function view.render(state: any, facts: any, cx: any): any
 	if state.page == "settings" then
 		return {
 			main = ui.node("col", { role = "fl.root", gap = "none" }, { header(state, facts), view.settings_body(state) }),
-			dock = dock(state, cx.cols < 96),
+			dock = dock(state, facts, cx.cols < WIDE_MEDIUM),
 		}
 	end
-	local wide = cx.cols >= 150
-	local medium = cx.cols >= 96
-	local list_cells = math.max(12, if medium then math.min(42, math.floor(cx.cols * 0.25) - 7) else cx.cols - 14)
+	local wide = cx.cols >= WIDE_COLS
+	local medium = cx.cols >= WIDE_MEDIUM
+	local list_cells = math.max(12, if medium then 44 else cx.cols - 14)
 	local middle = ui.node("col", { key = "middle", role = "fl.sidebar", gap = "none" }, {
 		source_strip(state),
 		queue_block(state, facts, list_cells),
 	})
 	local parts: { any } = { middle, right(state, facts, wide) }
 	if wide and facts.item then
-		table.insert(parts, ui.node("col", { key = "context", role = "fl.context", gap = "none" }, {
-			thread_block(state, facts.item),
-		}))
+		local side: { any } = { thread_block(state, facts.item) }
+		local why = why_of(facts.item)
+		if why then
+			table.insert(side, ui.node("col", { key = "why", role = "fl.context.why", gap = "sm" }, {
+				line({ t("判断理由", "strong") }),
+				line(why, { role = "fl.context.text" }),
+			}))
+		end
+		table.insert(parts, ui.node("col", { key = "context", role = "fl.context", gap = "lg" }, side))
 	end
 	local body = ui.node(if medium then "row" else "col", {
 		key = "body", role = if medium then "fl.layout" else "fl.layout.stack", gap = "none", align = "stretch",
 	}, parts)
 	return {
 		main = ui.node("col", { role = "fl.root", gap = "none" }, { header(state, facts), body }),
-		dock = dock(state, not medium),
+		dock = dock(state, facts, not medium),
+		layer = if facts.dialog_item then thread_dialog(state, facts.dialog_item) else nil,
 	}
 end
 
