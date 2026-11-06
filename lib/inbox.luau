@@ -1738,8 +1738,10 @@ end
 
 local TAB_SEGMENTS = 3
 
--- The workbench tab's name. A P0 item counts only as 紧急, so the segments add up;
--- at most three show, the rest go to a total after them.
+-- The workbench tab's name. Tern caps a tab name at 220px (about 17 CJK characters),
+-- so the total leads and each kind is a two-character word with its count:
+-- `飞书 7 · 等你1 执行5 分析1`. A P0 item counts only as 紧急, so the kinds add up to
+-- the total; at most three show, the rest go to `+N`.
 local function tab_name(state: any): string
 	if state.problem and #state.items == 0 then
 		return "飞书 · ⚠ 加载失败"
@@ -1764,11 +1766,12 @@ local function tab_name(state: any): string
 			end
 		end
 	end
-	local segments, rest = {}, 0
-	for _, part in { { counts.task, " 个任务等你" }, { counts.urgent, " 紧急" }, { counts.reply, " 待回复" }, { counts.deep, " 待执行" }, { counts.other, " 待分析" } } do
+	local segments, rest, total = {}, 0, 0
+	for _, part in { { counts.task, "等你" }, { counts.urgent, "紧急" }, { counts.reply, "回复" }, { counts.deep, "执行" }, { counts.other, "分析" } } do
+		total += part[1]
 		if part[1] > 0 then
 			if #segments < TAB_SEGMENTS then
-				table.insert(segments, tostring(part[1]) .. part[2])
+				table.insert(segments, part[2] .. tostring(part[1]))
 			else
 				rest += part[1]
 			end
@@ -1777,8 +1780,8 @@ local function tab_name(state: any): string
 	if rest > 0 then
 		table.insert(segments, "+" .. tostring(rest))
 	end
-	local name = "飞书 · " .. (if #segments > 0 then table.concat(segments, " · ") else "已清空")
-	return if state.problem then name .. " · ⚠" else name
+	local name = if total > 0 then "飞书 " .. tostring(total) .. " · " .. table.concat(segments, " ") else "飞书 · 已清空"
+	return if state.problem then name .. " ⚠" else name
 end
 
 tern.block.define("inbox", {
