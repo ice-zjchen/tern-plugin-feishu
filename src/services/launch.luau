@@ -1,8 +1,24 @@
--- Shared by headless turns and the window's native omp launcher.
+-- How omp is started, shared by headless turns (host) and task tabs (window):
+-- which program, in which workspace, with which runtime config and PATH.
 local tern = require("tern")
-local settings = require("./settings")
+local settings = require("../shared/settings")
 
-local runtime = {}
+local launch = {}
+
+-- omp by name last: a GUI-started daemon's PATH may not reach it.
+function launch.program(): string
+	local configured = tern.kv.get("agent")
+	if type(configured) == "string" and configured ~= "" then
+		return configured
+	end
+	local home = tern.getenv("HOME")
+	for _, path in { if home then home .. "/.local/bin/omp" else "", "/opt/homebrew/bin/omp", "/usr/local/bin/omp" } do
+		if path ~= "" and tern.fs.exists(path) then
+			return path
+		end
+	end
+	return "omp"
+end
 
 local function absolute(path: string, base: string): string
 	local home = tern.getenv("HOME")
@@ -13,7 +29,7 @@ local function absolute(path: string, base: string): string
 	return if string.sub(path, 1, 1) == "/" then path else base .. "/" .. path
 end
 
-function runtime.prepare(): any
+function launch.prepare(): any
 	local workspace = settings.get("workspace")
 	local cwd = if workspace == "" then tern.plugin.data else absolute(workspace, tern.plugin.data)
 	local warning: string? = nil
@@ -51,7 +67,7 @@ end
 -- A GUI-started daemon's PATH is only /usr/bin:/bin:…, and omp's tools inherit it,
 -- so the model could not run lark-cli or node. The inherited PATH keeps precedence
 -- over the fallbacks; only the configured lark-cli's folder goes ahead of it.
-function runtime.path(): string
+function launch.path(): string
 	local dirs: { string } = {}
 	local seen = {}
 	local function add(dir: string?)
@@ -77,21 +93,9 @@ function runtime.path(): string
 	return table.concat(dirs, ":")
 end
 
--- A message's omp task, kept where both halves of the plugin can read it and
--- where a reload can't lose it. One key each, so the halves never overwrite
--- each other's tasks.
-function runtime.task(id: string): any
-	local stored = tern.kv.get("task:" .. id)
-	return if type(stored) == "table" then stored else nil
-end
-
-function runtime.set_task(id: string, task: any)
-	tern.kv.set("task:" .. id, task)
-end
-
 -- Only the first line of the user-confirmed task can select a workspace.
 -- The registry belongs to the analysis workspace; message context is never read.
-function runtime.task_workspace(prompt: string, default: string): string
+function launch.task_workspace(prompt: string, default: string): string
 	local task = string.match(prompt, "\n## 任务\n(.-)\n\n## 飞书消息")
 	local first = task and string.match(task, "^([^\n]*)") or ""
 	assert(not string.match(first, "^附加仓库："), "旧附加仓库任务需重新确认执行 Workspace")
@@ -110,8 +114,8 @@ function runtime.task_workspace(prompt: string, default: string): string
 end
 
 -- cx.agents:start accepts a command string, unlike process.run's argv.
-function runtime.quote(value: string): string
+function launch.quote(value: string): string
 	return "'" .. string.gsub(value, "'", "'\\''") .. "'"
 end
 
-return runtime
+return launch

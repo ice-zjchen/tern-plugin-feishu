@@ -1,4 +1,4 @@
--- The workbench's settings, kept in tern.kv under `settings` and `chat_rules`.
+-- The plugin's settings, kept in tern.kv under `settings` and `chat_rules`.
 -- FIELDS drives the settings page, its keyboard handling and the defaults.
 
 local tern = require("tern")
@@ -23,7 +23,9 @@ settings.FIELDS = {
 	{ id = "agent_images", group = "agent", kind = "switch", default = true, label = "把图片发给 AI", hint = "触发消息里的图片，最多 3 张" },
 
 	{ id = "thinking", group = "environment", kind = "choice", default = "default", choices = { "default", "off", "low", "medium", "high" }, label = "思考强度" },
-	{ id = "model", group = "environment", kind = "text", default = "", label = "模型", hint = "如 opus；留空用默认模型" },
+	{ id = "model_analysis", group = "environment", kind = "text", default = "", label = "初判模型", hint = "如 opus 或 @smol；留空用 omp 默认模型" },
+	{ id = "model_chat", group = "environment", kind = "text", default = "", label = "对话模型", hint = "/ 对话用；留空用 omp 默认模型" },
+	{ id = "model_relevance", group = "environment", kind = "text", default = "", label = "关联判断模型", hint = "开始任务前判断强弱关联；简单二选一，可填 @smol" },
 	{ id = "workspace", group = "environment", kind = "text", default = "", label = "Workspace 目录", hint = "AI 分析和任务的启动目录，支持绝对路径或 ~/；留空或不存在时用插件数据目录" },
 	{ id = "skills_dir", group = "environment", kind = "text", default = "", label = "Skills 目录", hint = "额外技能目录，相对 Workspace；留空用默认发现规则" },
 
@@ -58,15 +60,9 @@ end
 function settings.get(id: string): any
 	local value = stored()[id]
 	local field = BY_ID[id]
-	if value == nil then
-		-- The switch this replaced kept @所有人 when on.
-		if id == "hide_atall" then
-			return stored().source_atall == false
-		end
-		return field.default
-	end
+	assert(field, "未知设置项：" .. id)
 	-- A value from another version, or one a choice no longer offers, is dropped.
-	if type(value) ~= type(field.default) or (field.choices and not table.find(field.choices, value)) then
+	if value == nil or type(value) ~= type(field.default) or (field.choices and not table.find(field.choices, value)) then
 		return field.default
 	end
 	return value
@@ -107,6 +103,28 @@ function settings.keywords(): { string }
 		table.insert(words, string.lower(word))
 	end
 	return words
+end
+
+-- Settings written by earlier versions, carried over once.
+do
+	local all = stored()
+	local changed = false
+	if type(all.model) == "string" then
+		-- One model for every turn became one per purpose.
+		all.model_analysis = all.model_analysis or all.model
+		all.model_chat = all.model_chat or all.model
+		all.model, changed = nil, true
+	end
+	if all.source_atall ~= nil then
+		-- The switch this replaced kept @所有人 when on.
+		if all.hide_atall == nil then
+			all.hide_atall = all.source_atall == false
+		end
+		all.source_atall, changed = nil, true
+	end
+	if changed then
+		tern.kv.set("settings", all)
+	end
 end
 
 return settings

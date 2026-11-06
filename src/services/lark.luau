@@ -1,9 +1,9 @@
--- Everything the workbench asks of `lark-cli`, always as the current user.
+-- Everything the plugin asks of `lark-cli`, always as the current user.
 -- Credentials stay with the CLI; this module never reads or stores a token.
 
 local tern = require("tern")
 
-local feishu = {}
+local lark = {}
 
 local ENV = { LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1" }
 local NOT_STARTED = "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书 Feishu / Lark：设置 lark-cli 路径」指定可执行文件。"
@@ -53,6 +53,10 @@ local function run(args: { string }, opts: { stdin: string?, timeout_ms: number?
 				done(nil, failure(envelope, "lark-cli 调用失败（退出码 " .. tostring(result.status) .. "）。"))
 				return
 			end
+			if envelope.identity ~= nil and envelope.identity ~= "user" then
+				done(nil, "lark-cli 返回的不是用户身份。请在终端运行 lark-cli auth login。")
+				return
+			end
 			done(envelope.data, nil)
 		end)
 	end)
@@ -73,7 +77,7 @@ local function iso(at: number): string
 end
 
 -- The current user's open_id.
-function feishu.whoami(done: (string?, string?) -> ())
+function lark.whoami(done: (string?, string?) -> ())
 	local started = pcall(function()
 		tern.process.run({ tern.kv.get("cli") or "lark-cli", "auth", "status" }, { env = ENV, timeout_ms = 20000 }, function(result)
 			local status = decode(result.stdout)
@@ -90,33 +94,50 @@ function feishu.whoami(done: (string?, string?) -> ())
 	end
 end
 
--- One page of messages matching `filters` since `days` days ago. `page` continues an
--- earlier search: its cursor, and the start time that search used.
-function feishu.search(filters: { string }, days: number, done: (any, string?) -> (), page: { token: string?, since: number }?)
-	local args = {
-		"im", "+messages-search", "--as", "user", "--page-size", "50", "--no-reactions", "--format", "json",
-		"--start", iso(if page then page.since else os.time() - days * 86400),
-	}
-	for _, filter in filters do
+export type SearchPage = { messages: { any }, has_more: boolean, page_token: string? }
+
+-- One page of messages matching `filters` (CLI flags such as `--is-at-me`), from
+-- `since` (epoch seconds) when given, continuing at `token` when given.
+function lark.search(query: { filters: { string }, since: number?, token: string? }, done: (SearchPage?, string?) -> ())
+	local args = { "im", "+messages-search", "--as", "user", "--page-size", "50", "--no-reactions", "--format", "json" }
+	if query.since then
+		table.insert(args, "--start")
+		table.insert(args, iso(query.since))
+	end
+	for _, filter in query.filters do
 		table.insert(args, filter)
 	end
-	if page and page.token then
+	if query.token then
 		table.insert(args, "--page-token")
-		table.insert(args, page.token)
+		table.insert(args, query.token)
 	end
 	run(args, nil, function(data, err)
 		if err then
 			done(nil, err)
-		elseif type(data) ~= "table" or type(data.messages) ~= "table" then
-			done(nil, "消息响应格式不符合预期。请升级 lark-cli。")
-		else
-			done(data, nil)
+			return
 		end
+		if type(data) ~= "table" or type(data.messages) ~= "table" then
+			done(nil, "消息响应格式不符合预期。请升级 lark-cli。")
+			return
+		end
+		for _, message in data.messages do
+			if type(message) ~= "table" or type(message.message_id) ~= "string" then
+				done(nil, "消息响应缺少有效的 message_id。请检查 lark-cli 版本。")
+				return
+			end
+		end
+		local more = data.has_more == true
+		local token = if type(data.page_token) == "string" and data.page_token ~= "" then data.page_token else nil
+		if more and not token then
+			done(nil, "服务端仍有更多结果，但未返回有效分页游标。")
+			return
+		end
+		done({ messages = data.messages, has_more = more, page_token = token }, nil)
 	end)
 end
 
 -- Current user's group notification preferences, at most ten chats per request.
-function feishu.chat_settings(chat_ids: { string }, done: (any, string?) -> ())
+function lark.chat_settings(chat_ids: { string }, done: (any, string?) -> ())
 	local found = {}
 	local problem: string? = nil
 	local function batch(at: number)
@@ -159,7 +180,7 @@ end
 
 -- Whether the current user has read each message, fifty ids per request. A message
 -- the server can't determine is left out, and a failure keeps what came before it.
-function feishu.read_status(message_ids: { string }, done: ({ [string]: boolean }, string?) -> ())
+function lark.read_status(message_ids: { string }, done: ({ [string]: boolean }, string?) -> ())
 	local found = {}
 	local function batch(at: number)
 		if at > #message_ids then
@@ -194,7 +215,7 @@ end
 
 -- `count` messages of a chat, oldest first. With `until_time` (`YYYY-MM-DD
 -- HH:MM`, the search results' create_time) only those up to that minute.
-function feishu.history(chat_id: string, count: number, until_time: string?, done: ({ any }?, string?) -> ())
+function lark.history(chat_id: string, count: number, until_time: string?, done: ({ any }?, string?) -> ())
 	local args = {
 		"im", "+chat-messages-list", "--as", "user", "--chat-id", chat_id, "--page-size", tostring(count),
 		"--order", "desc", "--no-reactions", "--format", "json",
@@ -222,39 +243,18 @@ function feishu.history(chat_id: string, count: number, until_time: string?, don
 end
 
 -- Today's agenda as the CLI returns it; an error means the agent goes without.
-function feishu.agenda(done: (any, string?) -> ())
+function lark.agenda(done: (any, string?) -> ())
 	run({ "calendar", "+agenda", "--as", "user", "--format", "json" }, { timeout_ms = 30000 }, done)
 end
 
--- The CLI writes an image in a message as `![Image](img_xxx)`. Returns the keys,
--- at most `limit`, and the text with each one replaced by a readable mark.
-local IMAGE = "!%[[^%]]*%]%((img_[%w_%-]+)%)"
-
-function feishu.images_in(content: string, limit: number): { string }
-	local keys = {}
-	for key in string.gmatch(content, IMAGE) do
-		if #keys < limit and not table.find(keys, key) then
-			table.insert(keys, key)
-		end
-	end
-	return keys
-end
-
--- Whether a message's text carries an @所有人, in any of the forms the CLI writes.
-function feishu.mentions_all(content: string): boolean
-	return string.find(content, "@_all", 1, true) ~= nil
-		or string.find(content, '<at user_id="all"', 1, true) ~= nil
-		or string.find(content, "@everyone", 1, true) ~= nil
-end
-
-function feishu.clean(content: string): string
-	return (string.gsub(content, IMAGE, "[图片]"))
-end
-
 -- Saves an image under the plugin's data folder; `done` gets the saved path,
--- relative to that folder. The key comes from the pattern above, so it can't
--- name a path of its own.
-function feishu.download_image(message_id: string, key: string, done: (string?, string?) -> ())
+-- relative to that folder. Only `img_…` keys are accepted, so a key cannot name
+-- a path of its own.
+function lark.download_image(message_id: string, key: string, done: (string?, string?) -> ())
+	if not string.match(key, "^img_[%w_%-]+$") then
+		done(nil, "图片 key 不合法：" .. key)
+		return
+	end
 	run({
 		"im", "+messages-resources-download", "--as", "user", "--message-id", message_id, "--file-key", key,
 		"--type", "image", "--output", "images/" .. key, "--format", "json",
@@ -268,4 +268,4 @@ function feishu.download_image(message_id: string, key: string, done: (string?, 
 	end)
 end
 
-return feishu
+return lark

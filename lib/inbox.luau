@@ -8,14 +8,14 @@
 
 local tern = require("tern")
 local edit = require("../src/shared/text")
-local feishu = require("./feishu")
+local lark = require("../src/services/lark")
+local markup = require("../src/shared/markup")
 local agent = require("./agent")
-local runtime = require("./runtime")
-local settings = require("./settings")
+local bridge = require("../src/shared/bridge")
+local settings = require("../src/shared/settings")
 local view = require("./view")
-local cache = require("./cache")
+local store = require("../src/services/store")
 
-local DECISION_TTL = 30 * 86400
 local MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 local VIEWS = {
@@ -36,7 +36,6 @@ local BURST_SECONDS = 10 * 60
 local REPLY_BACK_SECONDS = 30 * 60
 -- A chat that is still moving gets a moment to finish before omp reads it.
 local SETTLE_SECONDS = 90
-local TASK_LINK = "tern-plugin-feishu://task/"
 
 
 local running: { [number]: any } = {}
@@ -69,36 +68,11 @@ local function log(state: any, who: string, text: string)
 end
 
 local function render(state: any)
-	cache.save(state)
+	store.save(state)
 	state.cx:render()
 end
 
-----------------------------------------------------------------------------
--- Persisted decisions and stars
-
-local function decisions(): { [string]: any }
-	local stored = tern.kv.get("decisions")
-	return if type(stored) == "table" then stored else {}
-end
-
-local function record(ids: { string }, outcome: string?)
-	local stored = decisions()
-	local now = os.time()
-	for id, decision in stored do
-		if type(decision) ~= "table" or now - (tonumber(decision.t) or 0) > DECISION_TTL then
-			stored[id] = nil
-		end
-	end
-	for _, id in ids do
-		stored[id] = if outcome then { s = outcome, t = now } else nil
-	end
-	tern.kv.set("decisions", stored)
-end
-
-local function stars(): { any }
-	local stored = tern.kv.get("stars")
-	return if type(stored) == "table" then stored else {}
-end
+local record, decisions, stars = store.record, store.decisions, store.stars
 
 local function is_star(id: string): boolean
 	for _, star in stars() do
@@ -318,7 +292,7 @@ local function get_image(state: any, message_id: string, key: string, done: (any
 	end
 	image = { waiters = { done } }
 	state.images[key] = image
-	feishu.download_image(message_id, key, function(path, err)
+	lark.download_image(message_id, key, function(path, err)
 		image.settled = true
 		if path then
 			local ok, bytes = pcall(tern.fs.read, tern.plugin.data .. "/" .. path, MAX_IMAGE_BYTES)
@@ -341,7 +315,7 @@ end
 
 local function show_images_of(state: any, message: any)
 	if settings.get("show_images") and not message.deleted then
-		for _, key in feishu.images_in(message.content, 4) do
+		for _, key in markup.images(message.content, 4) do
 			get_image(state, message.id, key, function() end)
 		end
 	end
@@ -363,7 +337,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 	end
 	item.thread_waiters = { done }
 	local until_time = if item.chat_type == "p2p" then nil else item.time
-	feishu.history(item.chat_id, settings.get("thread_size"), until_time, function(messages, err)
+	lark.history(item.chat_id, settings.get("thread_size"), until_time, function(messages, err)
 		local waiters = item.thread_waiters
 		item.thread_waiters = nil
 		item.thread_error = err
@@ -389,7 +363,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 		item.thread = thread
 		item.thread_for_agent = {}
 		for _, message in thread do
-			table.insert(item.thread_for_agent, { id = message.id, sender = message.sender, time = message.time, content = feishu.clean(message.content) })
+			table.insert(item.thread_for_agent, { id = message.id, sender = message.sender, time = message.time, content = markup.clean(message.content) })
 		end
 		local last = thread[#thread]
 		if messages and item.chat_type == "p2p" and last and last.mine and not item.triage then
@@ -417,7 +391,7 @@ local function extras(state: any, except: any): any
 			table.insert(others, {
 				sender = item.name,
 				chat = item.chat,
-				summary = if item.analysis then item.analysis.summary else string.sub(feishu.clean(item.content), 1, 200),
+				summary = if item.analysis then item.analysis.summary else string.sub(markup.clean(item.content), 1, 200),
 			})
 		end
 	end
@@ -433,7 +407,7 @@ local function extras(state: any, except: any): any
 		end,
 		others = others,
 		agenda = if settings.get("use_agenda") then state.agenda else nil,
-		clean = feishu.clean,
+		clean = markup.clean,
 	}
 end
 
@@ -478,7 +452,7 @@ local function start(state: any, item: any)
 	item.agent, item.agent_error = "running", nil
 	state.active += 1
 	log(state, "agent", item.name .. "：开始分析")
-	cache.save(state)
+	store.save_now(state)
 	load_thread(state, item, function()
 		if not alive(state) then
 			state.active -= 1
@@ -490,7 +464,7 @@ local function start(state: any, item: any)
 			pump(state)
 			return
 		end
-		local keys = if settings.get("agent_images") then feishu.images_in(item.content, 3) else {}
+		local keys = if settings.get("agent_images") then markup.images(item.content, 3) else {}
 		local image_message = item.latest_id or item.id
 		local waiting, paths = #keys, {}
 		if waiting == 0 then
@@ -731,7 +705,7 @@ local function merge(state: any, sources: { any })
 		if entry.mention then
 			item.mention = true
 			item.via = if mentions_me then "@我" else "@所有人"
-		elseif item.via == "群聊" and not mentions_me and feishu.mentions_all(item.content) then
+		elseif item.via == "群聊" and not mentions_me and markup.mentions_all(item.content) then
 			-- Found through another source, such as a starred sender's message.
 			item.via = "@所有人"
 		end
@@ -788,8 +762,8 @@ local function prune(state: any)
 				agent.forget(item.session)
 				item.session = nil
 			end
-			if runtime.task(item.id) then
-				runtime.set_task(item.id, nil)
+			if bridge.task(item.id) then
+				bridge.set_task(item.id, nil)
 			end
 		end
 	end
@@ -812,7 +786,7 @@ local function sync_read(state: any, done: () -> ())
 		done()
 		return
 	end
-	feishu.read_status(ids, function(found, err)
+	lark.read_status(ids, function(found, err)
 		if not alive(state) then
 			return
 		end
@@ -842,13 +816,13 @@ local function sync_replies(state: any)
 	for _, item in state.items do
 		if item.triage == "handoff" and state.me then
 			local since = os.date("%Y-%m-%d %H:%M", item.handoff_at or os.time()) :: string
-			feishu.search({ "--chat-id", item.chat_id, "--sender", state.me }, 1, function(data, err)
+			lark.search({ filters = { "--chat-id", item.chat_id, "--sender", state.me }, since = os.time() - 86400 }, function(data, err)
 				if err or not alive(state) or item.triage ~= "handoff" then
 					return
 				end
-				for _, message in data.messages do
+				for _, message in (data :: any).messages do
 					if type(message) == "table" and not message.deleted and tostring(message.create_time or "") >= since then
-						local spoken = feishu.clean(tostring(message.content or ""))
+						local spoken = markup.clean(tostring(message.content or ""))
 						if item.spoken ~= spoken then
 							item.spoken = spoken
 							state.flash = "检测到可能的回复，请确认：" .. spoken
@@ -869,7 +843,7 @@ local function sync_tasks(state: any): boolean
 	local changed = false
 	for _, item in state.items do
 		if item.triage == "doing" then
-			local task = runtime.task(item.id)
+			local task = bridge.task(item.id)
 			local status = if task then task.state else "closed"
 			local result = if task and type(task.result) == "string" then task.result else nil
 			if status ~= item.task_state or result ~= item.task_raw then
@@ -959,7 +933,7 @@ local function search_sources(state: any, more: boolean, after: () -> ())
 	for _, source in sources do
 		local previous = state.cursors[source.key]
 		local since = if more then previous.since else os.time() - settings.get("lookback_days") * 86400
-		feishu.search(source.filters, settings.get("lookback_days"), function(data, err)
+		lark.search({ filters = source.filters, since = since, token = if more then previous.token else nil }, function(data, err)
 			waiting -= 1
 			if err then
 				problem = err
@@ -996,7 +970,7 @@ local function search_sources(state: any, more: boolean, after: () -> ())
 						add_chat(tostring(message.chat_id or ""), tostring(message.chat_type or "group"))
 					end
 				end
-				feishu.chat_settings(ids, function(prefs, pref_err)
+				lark.chat_settings(ids, function(prefs, pref_err)
 					if not alive(state) then
 						return
 					end
@@ -1007,7 +981,7 @@ local function search_sources(state: any, more: boolean, after: () -> ())
 					finish()
 				end)
 			end
-		end, if more then { token = previous.token, since = since } else { since = since })
+		end)
 	end
 end
 
@@ -1064,7 +1038,7 @@ local function refresh(state: any)
 	state.loading, state.problem = true, nil
 	state.last_refresh = os.time()
 
-	feishu.whoami(function(me, err)
+	lark.whoami(function(me, err)
 		if not alive(state) then
 			return
 		end
@@ -1103,7 +1077,7 @@ local function refresh(state: any)
 			after_agenda()
 			return
 		end
-		feishu.agenda(function(agenda, agenda_err)
+		lark.agenda(function(agenda, agenda_err)
 			if not alive(state) then
 				return
 			end
@@ -1185,7 +1159,7 @@ local function tab_title(item: any, task: string?): string
 	local a = item.analysis
 	local what = if task and a and a.task and a.task.title ~= "" then a.task.title
 		elseif a and a.summary ~= "" then a.summary
-		else feishu.clean(item.content)
+		else markup.clean(item.content)
 	local who = if item.chat_type == "p2p" then item.name else item.name .. "@" .. item.chat
 	return "飞书: " .. edit.clip(edit.flat(what), TAB_TITLE_CHARS) .. " · " .. edit.clip(edit.flat(who), 16)
 end
@@ -1199,7 +1173,7 @@ local function start_task(state: any, item: any, task: string?)
 	local latest, content, triage = item.latest_id or item.id, item.content, item.triage
 	state.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在打开任务页…"
 	local function prepare()
-		agent.prepare_task(item, feishu.clean, task, extras(state, item).notice, function(prompt, cost, err)
+		agent.prepare_task(item, markup.clean, task, extras(state, item).notice, function(prompt, cost, err)
 			state.spent += cost
 			item.preparing_task = nil
 			if not alive(state) then
@@ -1213,9 +1187,9 @@ local function start_task(state: any, item: any, task: string?)
 				state.cx:toast("error", state.flash, err)
 			else
 				item.task_state, item.task_raw, item.result = "starting", nil, nil
-				runtime.set_task(item.id, { prompt = prompt, state = "starting", title = tab_title(item, task) })
+				bridge.set_task(item.id, { prompt = prompt, state = "starting", title = tab_title(item, task) })
 				resolve(state, item, "doing", "已开始任务")
-				state.cx:open(TASK_LINK .. item.id)
+				state.cx:open(bridge.LINK .. item.id)
 			end
 			render(state)
 		end)
@@ -1238,14 +1212,14 @@ local function primary(state: any, item: any)
 		start_task(state, item, task_text(item))
 	elseif action.key == "jump" then
 		item.task_new = nil
-		state.cx:open(TASK_LINK .. item.id)
+		state.cx:open(bridge.LINK .. item.id)
 	elseif action.key == "reopen" then
-		local task = runtime.task(item.id)
+		local task = bridge.task(item.id)
 		if task then
 			task.state = "starting"
-			runtime.set_task(item.id, task)
+			bridge.set_task(item.id, task)
 			item.task_state = "starting"
-			state.cx:open(TASK_LINK .. item.id)
+			state.cx:open(bridge.LINK .. item.id)
 		else
 			start_task(state, item, if item.analysis then task_text(item) else nil)
 		end
@@ -1302,7 +1276,7 @@ local function run_command(state: any)
 	table.insert(item.talk, { me = true, text = said })
 	state.flash = "AI 正在回答…"
 	log(state, "你", "对 AI 说：" .. said)
-	cache.save(state)
+	store.save_now(state)
 	load_thread(state, item, function()
 		local current_judgment = {
 			decision = if item.analysis then item.analysis.state else "未判断",
@@ -1361,7 +1335,7 @@ local function toggle_star(state: any, item: any)
 	if not found then
 		table.insert(list, { id = item.sender_id, name = item.name })
 	end
-	tern.kv.set("stars", tern.json.array(list))
+	store.set_stars(list)
 	state.flash = (if found then "已取消星标：" else "已星标：") .. item.name
 	if not found then
 		refresh(state)
@@ -1621,7 +1595,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 	elseif name == "omp" then
 		if item.triage == "doing" then
 			item.task_new = nil
-			state.cx:open(TASK_LINK .. item.id)
+			state.cx:open(bridge.LINK .. item.id)
 		else
 			start_task(state, item, nil)
 			log(state, "你", "手动开任务：" .. item.name)
@@ -1779,7 +1753,7 @@ tern.block.define("inbox", {
 			cursors = {},
 		}
 		running[cx.pane] = state
-		if cache.restore(state) then
+		if store.restore(state) then
 			state.view = view_from(if type(saved) == "table" then saved else state)
 			if state.view == "mention" or state.view == "dm" then
 				state.source, state.view = state.view, "pending"
@@ -1791,7 +1765,7 @@ tern.block.define("inbox", {
 			-- Recreate only local blob handles; no download or thread fetch on reload.
 			local item = current(state)
 			for _, message in (if settings.get("show_images") and item and item.thread then item.thread else {}) do
-				for _, key in feishu.images_in(message.content, 4) do
+				for _, key in markup.images(message.content, 4) do
 					local path = state.image_paths[key]
 					if path then
 						local ok, bytes = pcall(tern.fs.read, tern.plugin.data .. "/" .. path, MAX_IMAGE_BYTES)
@@ -1801,7 +1775,7 @@ tern.block.define("inbox", {
 					end
 				end
 			end
-			cache.save(state)
+			store.save(state)
 		else
 			refresh(state)
 		end
@@ -1855,7 +1829,7 @@ tern.block.define("inbox", {
 				start_edit(state, current(state))
 			end
 		end
-		cache.save(state)
+		store.save(state)
 	end,
 
 	key = function(state, key, cx)
@@ -1868,7 +1842,7 @@ tern.block.define("inbox", {
 		end
 		if state.mode then
 			local handled = key_in_field(state, key)
-			cache.save(state)
+			store.save(state)
 			return handled
 		end
 		if key.ctrl or key.meta or key.alt then
@@ -1876,7 +1850,7 @@ tern.block.define("inbox", {
 		end
 		if state.page == "settings" then
 			local handled = key_in_settings(state, key)
-			cache.save(state)
+			store.save(state)
 			return handled
 		end
 		local k = key.text or key.name
@@ -1936,13 +1910,13 @@ tern.block.define("inbox", {
 		else
 			return false
 		end
-		cache.save(state)
+		store.save(state)
 		return true
 	end,
 
 	-- Also checkpoint at the host's lifecycle save boundary.
 	save = function(state)
-		cache.save(state)
+		store.save(state)
 		return { view = state.view }
 	end,
 })

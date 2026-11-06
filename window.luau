@@ -1,5 +1,6 @@
 local tern = require("tern")
-local runtime = require("./lib/runtime")
+local bridge = require("./src/shared/bridge")
+local launch = require("./src/services/launch")
 
 tern.command({
 	id = "inbox",
@@ -49,12 +50,12 @@ end
 
 -- Records a task's state; the block picks it up when it next looks.
 local function update(id: string, change: { [string]: any })
-	local task = runtime.task(id)
+	local task = bridge.task(id)
 	if task then
 		for k, v in change do
 			task[k] = v
 		end
-		runtime.set_task(id, task)
+		bridge.set_task(id, task)
 	end
 end
 
@@ -71,12 +72,12 @@ end
 -- link instead, with the task itself in the plugin's store: only an id gets
 -- through this pattern. A task whose tab is still open goes back to that tab.
 tern.route.link(function(link, cx)
-	local id = string.match(link.url, "^tern%-plugin%-feishu://task/([%w_%-]+)$")
+	local id = bridge.id_of(link.url)
 	if not id then
 		return nil
 	end
 	local ok, err = pcall(function()
-		local task = runtime.task(id)
+		local task = bridge.task(id)
 		assert(task, "这条消息的任务已不存在")
 		local open = if type(task.pane) == "number" then open_block(cx, task.pane) else nil
 		if open and open.state ~= "exited" then
@@ -89,20 +90,18 @@ tern.route.link(function(link, cx)
 			update(id, { state = "closed" })
 			return
 		end
-		local configured = tern.kv.get("agent")
-		local program = if type(configured) == "string" and configured ~= "" then configured else "omp"
-		local launch = runtime.prepare()
-		if launch.warning then
-			cx:toast("info", "工作目录已回退", launch.warning)
+		local env = launch.prepare()
+		if env.warning then
+			cx:toast("info", "工作目录已回退", env.warning)
 		end
-		local cwd = runtime.task_workspace(task.prompt, launch.cwd)
+		local cwd = launch.task_workspace(task.prompt, env.cwd)
 		-- A different workspace must discover its own config, skills and rules.
-		local config = if cwd == launch.cwd then " --config " .. runtime.quote(launch.config) else ""
+		local config = if cwd == env.cwd then " --config " .. launch.quote(env.config) else ""
 		-- A normal session in omp's own store, so it outlives the workbench's.
 		local pane = cx.agents:start({
 			prompt = task.prompt,
 			cwd = cwd,
-			command = runtime.quote(program) .. " --cwd " .. runtime.quote(cwd) .. " --allow-home" .. config,
+			command = launch.quote(launch.program()) .. " --cwd " .. launch.quote(cwd) .. " --allow-home" .. config,
 			how = "tab",
 		})
 		-- Name and colour are conveniences: failing to set them must not fail the started task.
@@ -131,7 +130,7 @@ end)
 -- A turn that ended counts as done only if it began: a new tab is idle first.
 tern.on("agent_state", function(ev: any, cx: any)
 	local id = panes()[tostring(ev.pane)]
-	local task = if id then runtime.task(id :: string) else nil
+	local task = if id then bridge.task(id :: string) else nil
 	if not task then
 		return
 	end
@@ -153,7 +152,7 @@ tern.on("pane_closed", function(ev: any, _cx: any)
 	if id then
 		map[tostring(ev.pane)] = nil
 		tern.kv.set("task_panes", map)
-		local task = runtime.task(id)
+		local task = bridge.task(id)
 		if task and task.state ~= "done" then
 			update(id, { state = "closed" })
 		end

@@ -127,7 +127,7 @@ tern plugin link .
 | 分组 | 内容 |
 | --- | --- |
 | AI 分析 | 自动分析开关、并发数、打开时分析积压的条数、会话上下文条数、是否提供今日日程、是否把图片发给 AI |
-| 模型与目录 | 思考强度、模型、Workspace 目录、Skills 目录 |
+| 模型与目录 | 思考强度；初判、`/` 对话、交办前关联判断各自的模型（留空用 omp 默认模型，可填 `@smol` 这类角色）；Workspace 目录、Skills 目录 |
 | 消息来源 | @我、私聊、星标联系人 |
 | 过滤 | 隐藏 @所有人、隐藏机器人消息、隐藏免打扰的群、按群名隐藏 |
 | 运行 | 显示图片、自动刷新间隔、检索最近几天 |
@@ -195,11 +195,14 @@ tern plugin link .
 - `src/shared/time.luau`：消息时间的自然日分层格式。
 - `src/shared/text.luau`：输入框的文本编辑（UTF-16 光标）、截断和消息链接白名单。
 - `src/shared/template.luau`、`src/services/prompts.luau`：提示词模板的解析、加载和填充。
-- `lib/cache.luau`：本地工作台快照、分析中断恢复及不含运行时句柄的序列化。
-- `lib/settings.luau`：设置项定义和读写。
-- `lib/feishu.luau`：所有 `lark-cli` 调用。
-- `lib/agent.luau`：所有 omp 调用。
-- `lib/runtime.luau`：共用的 omp 工作目录、技能配置、绝对会话路径与原生命令引用。
+- `src/shared/markup.luau`：消息里的图片、@所有人 标记解析。
+- `src/shared/settings.luau`：设置项定义、读写及旧版设置迁移。
+- `src/shared/bridge.luau`：工作台（host）与任务页（window）之间的任务记录和链接约定。
+- `src/services/lark.luau`：所有 `lark-cli` 调用，两个面板共用。
+- `src/services/omp.luau`：无头 omp 调用，按用途（初判、对话、关联判断）选模型。
+- `src/services/launch.luau`：omp 的可执行文件、工作目录、技能配置、PATH，以及任务首行的执行 Workspace 校验。
+- `src/services/store.luau`：工作台快照（合并 0.5 秒内的多次修改再写入；开始分析和对话前立即写入）、处理结果和星标。
+- `lib/agent.luau`：初判、对话、关联判断的提示词组装和结果解析。
 - `inbox.css`：终端样式，颜色全部取自 Tern 主题变量。
 - `scripts/check.sh`：编译、对不依赖 tern 的模块做严格类型检查、运行 `tests/`，需要 `brew install luau`。
 

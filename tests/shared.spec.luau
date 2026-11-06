@@ -3,6 +3,23 @@ local t = require("./t")
 local text = require("../src/shared/text")
 local template = require("../src/shared/template")
 local time = require("../src/shared/time")
+local markup = require("../src/shared/markup")
+
+t.test("markup finds unique image keys up to the limit and cleans them", function()
+	local s = "a ![Image](img_1) b ![x](img_2) ![Image](img_1) ![y](img_3)"
+	local keys = markup.images(s, 2)
+	t.eq(#keys, 2)
+	t.eq(keys[1], "img_1")
+	t.eq(keys[2], "img_2")
+	t.eq(markup.clean("hi ![Image](img_1)"), "hi [图片]")
+end)
+
+t.test("markup.mentions_all recognises every CLI form", function()
+	t.eq(markup.mentions_all("@_all 开会"), true)
+	t.eq(markup.mentions_all('<at user_id="all">所有人</at>'), true)
+	t.eq(markup.mentions_all("@everyone"), true)
+	t.eq(markup.mentions_all("@张三"), false)
+end)
 
 -- text: UTF-16 offsets around astral characters (an emoji is two code units).
 t.test("text.len counts UTF-16 code units", function()

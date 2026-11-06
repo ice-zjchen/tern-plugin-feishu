@@ -1,6 +1,10 @@
--- Durable workbench state only: never callbacks, cx handles, timers or blobs.
+-- What the workbench keeps in tern.kv: the queue snapshot (written at most once
+-- per SAVE_DELAY_MS, never callbacks, cx handles, timers or blobs), per-message
+-- outcomes and starred senders.
 local tern = require("tern")
-local cache = {}
+local store = {}
+local SAVE_DELAY_MS = 500
+local DECISION_TTL = 30 * 86400
 local KEY = "inbox_snapshot"
 local VERSION = 1
 local ITEM_FIELDS = {
@@ -17,7 +21,38 @@ local STATE_FIELDS = {
 	"problem", "runtime_warning", "source",
 }
 
-function cache.save(state: any)
+-- Per-message outcomes, so a refresh can restore them: id -> { s = outcome, t = epoch }.
+function store.decisions(): { [string]: any }
+	local stored = tern.kv.get("decisions")
+	return if type(stored) == "table" then stored else {}
+end
+
+-- Records `outcome` (nil clears it) for `ids`, dropping entries older than the TTL.
+function store.record(ids: { string }, outcome: string?)
+	local stored = store.decisions()
+	local now = os.time()
+	for id, decision in stored do
+		if type(decision) ~= "table" or now - (tonumber(decision.t) or 0) > DECISION_TTL then
+			stored[id] = nil
+		end
+	end
+	for _, id in ids do
+		stored[id] = if outcome then { s = outcome, t = now } else nil
+	end
+	tern.kv.set("decisions", stored)
+end
+
+-- Starred senders: { { id, name } }.
+function store.stars(): { any }
+	local stored = tern.kv.get("stars")
+	return if type(stored) == "table" then stored else {}
+end
+
+function store.set_stars(list: { any })
+	tern.kv.set("stars", tern.json.array(list))
+end
+
+local function write(state: any)
 	if not state.has_snapshot then
 		return
 	end
@@ -44,7 +79,27 @@ function cache.save(state: any)
 	tern.kv.set(KEY, snapshot)
 end
 
-function cache.restore(state: any): boolean
+-- Saves at once. For moments a reload must see, such as a turn about to start:
+-- a snapshot that missed it would replay a turn that may already have used tools.
+function store.save_now(state: any)
+	state.save_pending = nil
+	write(state)
+end
+
+-- Saves soon, folding a burst of changes into one write.
+function store.save(state: any)
+	if state.save_pending then
+		return
+	end
+	state.save_pending = true
+	tern.timer(SAVE_DELAY_MS, function()
+		if state.save_pending then
+			store.save_now(state)
+		end
+	end)
+end
+
+function store.restore(state: any): boolean
 	local snapshot = tern.kv.get(KEY)
 	if type(snapshot) ~= "table" or snapshot.version ~= VERSION or type(snapshot.items) ~= "table" then
 		return false
@@ -87,4 +142,4 @@ function cache.restore(state: any): boolean
 	return true
 end
 
-return cache
+return store

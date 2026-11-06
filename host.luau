@@ -1,6 +1,7 @@
 local tern = require("tern")
 local ui = tern.ui
 local text = require("./src/shared/text")
+local lark = require("./src/services/lark")
 
 require("./lib/inbox")
 
@@ -20,11 +21,6 @@ local function selected(state)
 	return current and current.messages[state.selected]
 end
 
-local function decode(text)
-	local ok, value = pcall(tern.json.decode, text)
-	return if ok and type(value) == "table" then value else nil
-end
-
 local function fail(state, cx, message)
 	state.loading = false
 	state.error = message
@@ -40,73 +36,24 @@ local function fetch(state, cx, refresh)
 	local token = if refresh then nil else current.page_token
 	state.loading, state.error = true, nil
 	state.pendingRefresh = refresh
-	local argv = {
-		tern.kv.get("cli") or "lark-cli", "im", "+messages-search",
-		"--as", "user", "--is-at-me", "--page-size", "50",
-		"--no-reactions", "--format", "json",
-	}
-	if token then
-		table.insert(argv, "--page-token")
-		table.insert(argv, token)
-	end
-	local started = pcall(function()
-		tern.process.run(argv, {
-			timeout_ms = 60000,
-			env = { LARKSUITE_CLI_NO_UPDATE_NOTIFIER = "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER = "1" },
-		}, function(result)
-			if not running(cx) then return end
-			if result.timed_out then
-				fail(state, cx, "请求超时（60 秒）。按 R 重新检索，或点击重试继续当前页。")
-				return
-			end
-			local envelope = decode(if result.status == 0 then result.stdout else result.stderr)
-			if not envelope or envelope.ok ~= true or result.status ~= 0 then
-				local detail = envelope and envelope.error
-				local message = "lark-cli 调用失败。请在终端运行消息检索命令检查登录、权限和 CLI 版本。"
-				if type(detail) == "table" then
-					message = tostring(detail.message or message)
-					if type(detail.hint) == "string" then message ..= "\n" .. detail.hint end
-					if type(detail.missing_scopes) == "table" then
-						message ..= "\n缺少权限：" .. table.concat(detail.missing_scopes, ", ")
-					end
-				end
-				fail(state, cx, message)
-				return
-			end
-			local data = envelope.data
-			if envelope.identity ~= "user" or type(data) ~= "table" or type(data.messages) ~= "table"
-				or type(data.has_more) ~= "boolean" then
-				fail(state, cx, "消息响应格式不符合预期，或返回的不是用户身份。请升级 lark-cli。")
-				return
-			end
-			if data.has_more then
-				if type(data.page_token) ~= "string" or data.page_token == "" then
-					fail(state, cx, "服务端仍有更多结果，但未返回有效分页游标；未标记为全部加载。")
-					return
-				end
-				if not refresh and state.tokens[data.page_token] then
-					fail(state, cx, "服务端重复返回分页游标。按 R 重新检索；未标记为全部加载。")
-					return
-				end
-			end
-			for _, message in data.messages do
-				if type(message) ~= "table" or type(message.message_id) ~= "string" then
-					fail(state, cx, "消息响应缺少有效的 message_id。请检查 lark-cli 版本。")
-					return
-				end
-			end
-			if refresh then state.pages, state.tokens, state.index = {}, {}, 0 end
-			table.insert(state.pages, data)
-			state.index = #state.pages
-			if data.has_more then state.tokens[data.page_token] = true end
-			state.selected = if #data.messages > 0 then 1 else 0
-			state.loading, state.error = false, nil
-			cx:render()
-		end)
+	lark.search({ filters = { "--is-at-me" }, token = token }, function(data, err)
+		if not running(cx) then return end
+		if not data then
+			fail(state, cx, err or "lark-cli 调用失败。")
+			return
+		end
+		if data.has_more and not refresh and state.tokens[data.page_token] then
+			fail(state, cx, "服务端重复返回分页游标。按 R 重新检索；未标记为全部加载。")
+			return
+		end
+		if refresh then state.pages, state.tokens, state.index = {}, {}, 0 end
+		table.insert(state.pages, data)
+		state.index = #state.pages
+		if data.has_more then state.tokens[data.page_token] = true end
+		state.selected = if #data.messages > 0 then 1 else 0
+		state.loading, state.error = false, nil
+		cx:render()
 	end)
-	if not started then
-		fail(state, cx, "无法启动 lark-cli。请安装 CLI，或通过命令面板「飞书 Feishu / Lark：设置 lark-cli 路径」指定可执行文件；远程会话需在主机上配置。")
-	end
 end
 
 local function navigate(state, cx, direction)

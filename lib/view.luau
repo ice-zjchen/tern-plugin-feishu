@@ -1,8 +1,8 @@
 -- Pure workbench rendering. Layout hooks live in inbox.css and use Tern's theme.
 
 local tern = require("tern")
-local feishu = require("./feishu")
-local settings = require("./settings")
+local markup = require("../src/shared/markup")
+local settings = require("../src/shared/settings")
 local time = require("../src/shared/time")
 local text = require("../src/shared/text")
 local ui = tern.ui
@@ -118,7 +118,7 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 	for _, item in facts.queue do
 		local status = view.STATUS[view.status(item)]
 		local timestamp, full_time = time.format(item.time)
-		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else feishu.clean(item.content)
+		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else markup.clean(item.content)
 		if (item.task_new or 0) > 0 then
 			status = { "任务期间有新消息", "warning" }
 		end
@@ -173,7 +173,7 @@ end
 local function images_of(state: any, message: any): any
 	local nodes = {}
 	if settings.get("show_images") and not message.deleted then
-		for _, key in feishu.images_in(tostring(message.content), 4) do
+		for _, key in markup.images(tostring(message.content), 4) do
 			local image = state.images[key]
 			if image and image.blob then
 				table.insert(nodes, ui.node("image", { key = key, blob = image.blob, role = "fl.image", alt = "消息图片", max = { h = "14lines" } }))
@@ -198,7 +198,7 @@ local function message_node(state: any, key: string, message: any, hit: boolean)
 			line({ t(message.sender, "strong") }),
 			line({ t(timestamp, "muted") }, { title = full_time }),
 		}),
-		line(if message.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(message.content)), { role = "fl.msg.text" }),
+		line(if message.deleted then { t("[消息已撤回]", "muted") } else markup.clean(tostring(message.content)), { role = "fl.msg.text" }),
 		images_of(state, message),
 	})
 end
@@ -250,7 +250,7 @@ end
 -- Without the side column, what was asked stays on screen: never hand off blind.
 local function quote_block(state: any, item: any): any
 	local children: { any } = {
-		line(if item.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(item.content)), { key = "text", role = "fl.msg.text" }),
+		line(if item.deleted then { t("[消息已撤回]", "muted") } else markup.clean(tostring(item.content)), { key = "text", role = "fl.msg.text" }),
 		images_of(state, { id = item.latest_id or item.id, content = item.content, deleted = item.deleted }),
 	}
 	local actions: { any } = {}
@@ -303,7 +303,7 @@ local function run_block(item: any): any?
 		if not item.analysis or item.analysis.manual then
 			return nil
 		end
-		local model = settings.get("model")
+		local model = settings.get("model_analysis")
 		local workspace = settings.get("workspace")
 		return folded("run", "分析记录 · 未记录", {
 			line({ t("这条的分析没有留下记录。下面是当前设置，不一定是当时用的。", "muted") }),
@@ -373,7 +373,7 @@ local function analysis_block(state: any, item: any): any
 			table.insert(tools, ui.button("归档", { key = "archive", size = "sm", variant = "quiet", keys = { "x" }, actions = { click = "archive" } }))
 		end
 	end
-	local title = if a and not a.manual and a.summary ~= "" then a.summary else feishu.clean(item.content)
+	local title = if a and not a.manual and a.summary ~= "" then a.summary else markup.clean(item.content)
 	local children: { any } = {
 		line({ t(title, "strong") }, { key = "title", role = "fl.summary.title" }),
 		ui.node("row", { key = "top", justify = "between", gap = "md", wrap = true }, {
