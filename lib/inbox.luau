@@ -1736,6 +1736,51 @@ local function view_from(saved: any): string
 	return "pending"
 end
 
+local TAB_SEGMENTS = 3
+
+-- The workbench tab's name. A P0 item counts only as 紧急, so the segments add up;
+-- at most three show, the rest go to a total after them.
+local function tab_name(state: any): string
+	if state.problem and #state.items == 0 then
+		return "飞书 · ⚠ 加载失败"
+	elseif state.loading and #state.items == 0 then
+		return "飞书 · 加载中…"
+	end
+	local counts = { task = 0, urgent = 0, reply = 0, deep = 0, other = 0 }
+	for _, item in state.items do
+		if not item.hidden and view.task_needs_me(item) then
+			counts.task += 1
+		elseif pending(item) then
+			local a = item.analysis
+			local status = view.status(item)
+			if a and a.pri == "P0" and (status == "reply" or status == "deep") then
+				counts.urgent += 1
+			elseif status == "reply" then
+				counts.reply += 1
+			elseif status == "deep" then
+				counts.deep += 1
+			else
+				counts.other += 1
+			end
+		end
+	end
+	local segments, rest = {}, 0
+	for _, part in { { counts.task, " 个任务等你" }, { counts.urgent, " 紧急" }, { counts.reply, " 待回复" }, { counts.deep, " 待执行" }, { counts.other, " 待分析" } } do
+		if part[1] > 0 then
+			if #segments < TAB_SEGMENTS then
+				table.insert(segments, tostring(part[1]) .. part[2])
+			else
+				rest += part[1]
+			end
+		end
+	end
+	if rest > 0 then
+		table.insert(segments, "+" .. tostring(rest))
+	end
+	local name = "飞书 · " .. (if #segments > 0 then table.concat(segments, " · ") else "已清空")
+	return if state.problem then name .. " · ⚠" else name
+end
+
 tern.block.define("inbox", {
 	font = "sans",
 	init = function(cx, _args, saved)
@@ -1795,12 +1840,9 @@ tern.block.define("inbox", {
 		return state
 	end,
 
+	-- Shown in the tab bar: what is waiting on you, most urgent first.
 	title = function(state)
-		local n = 0
-		for _, item in state.items do
-			n += if needs_me(item) then 1 else 0
-		end
-		return if n > 0 then "飞书 · " .. tostring(n) .. " 需要我" else "飞书工作台"
+		return tab_name(state)
 	end,
 
 	view = function(state, cx)
