@@ -443,7 +443,7 @@ local function correction(state: any, kind: string?): any
 		ui.node("row", { key = "input", role = "fl.correction.row", gap = "sm" }, {
 			ui.node("input", {
 				key = "field", role = "fl.command", text = state.command, cursor = state.command_cursor,
-				readonly = state.mode ~= "command", placeholder = placeholder,
+				placeholder = placeholder,
 			}),
 			ui.button("发送", { key = "run", variant = "quiet", actions = { click = "run-command" }, busy = state.talking ~= nil }),
 		}),
@@ -526,8 +526,9 @@ local function next_block(state: any, item: any, facts: any): any
 	if editable and not locked then
 		-- Keep this direct child: inbox callbacks focus main.body.right.reply.draft.
 		table.insert(children, ui.node("editor", {
+			-- Editable so a click sends `focus`, which enters edit mode; a readonly field sends nothing.
 			key = "draft", role = "fl.draft", text = facts.draft, cursor = state.draft_cursor,
-			readonly = state.mode ~= "draft", maxLines = 7,
+			readonly = stale, maxLines = 7,
 			placeholder = if kind == "deep" then "任务说明" else "回复内容",
 		}))
 	elseif locked then
@@ -708,8 +709,7 @@ local function field_row(state: any, field: any): any
 				key = "c",
 				text = value,
 				cursor = if editing then state.field_cursor else nil,
-				readonly = not editing,
-				placeholder = "回车编辑",
+				placeholder = "点击或回车编辑",
 			}),
 			line({ t(field.hint or "", "muted") }),
 		})
