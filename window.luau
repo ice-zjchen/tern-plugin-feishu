@@ -95,12 +95,16 @@ tern.route.link(function(link, cx)
 		if launch.warning then
 			cx:toast("info", "omp 工作目录已回退", launch.warning)
 		end
+		local attachments = ""
+		for _, directory in runtime.attached_dirs(task.prompt, launch.cwd) do
+			attachments ..= " --add-dir " .. runtime.quote(directory)
+		end
 		-- A normal session in omp's own store, so it outlives the workbench's.
 		local pane = cx.agents:start({
 			prompt = task.prompt,
 			cwd = launch.cwd,
 			command = runtime.quote(program) .. " --cwd " .. runtime.quote(launch.cwd) .. " --allow-home"
-				.. " --config " .. runtime.quote(launch.config),
+				.. " --config " .. runtime.quote(launch.config) .. attachments,
 			how = "tab",
 		})
 		local map = panes()
