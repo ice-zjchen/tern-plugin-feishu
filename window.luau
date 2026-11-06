@@ -105,11 +105,15 @@ tern.route.link(function(link, cx)
 			command = runtime.quote(program) .. " --cwd " .. runtime.quote(cwd) .. " --allow-home" .. config,
 			how = "tab",
 		})
-		-- A name is a convenience: failing to set it must not fail the started task.
+		-- Name and colour are conveniences: failing to set them must not fail the started task.
+		-- The tab icon stays the agent's own, so blue marks a Feishu task among other agent tabs.
 		pcall(function()
 			local tab = cx.session:tab_of(pane)
-			if tab and type(task.title) == "string" and task.title ~= "" then
-				cx.layout:name_tab(tab, task.title)
+			if tab then
+				if type(task.title) == "string" and task.title ~= "" then
+					cx.layout:name_tab(tab, task.title)
+				end
+				cx.layout:color_tab(tab, "blue")
 			end
 		end)
 		local map = panes()

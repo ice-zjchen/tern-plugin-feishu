@@ -1188,14 +1188,16 @@ local function clip(text: string, chars: number): string
 	return if at then string.sub(text, 1, at - 1) .. "…" else text
 end
 
--- The tab's name: what it works on, then whose message it came from.
+-- `TOPIC: text` like other tabs: what it works on, then whose message it came from.
+-- The icon stays the agent's own; Feishu task tabs are marked by colour instead.
+
 local function tab_title(item: any, task: string?): string
 	local a = item.analysis
 	local what = if task and a and a.task and a.task.title ~= "" then a.task.title
 		elseif a and a.summary ~= "" then a.summary
 		else feishu.clean(item.content)
 	local who = if item.chat_type == "p2p" then item.name else item.name .. "@" .. item.chat
-	return "飞书｜" .. clip(what, TAB_TITLE_CHARS) .. " · " .. clip(who, 16)
+	return "飞书: " .. clip(what, TAB_TITLE_CHARS) .. " · " .. clip(who, 16)
 end
 
 -- Confirmed tasks get a relevance check before opening; direct `o` stays manual.
