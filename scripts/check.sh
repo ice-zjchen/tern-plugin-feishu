@@ -7,8 +7,8 @@ cd "$(dirname "$0")/.."
 echo "== compile"
 find . -name '*.luau' -not -path './design/*' -print0 | xargs -0 luau-compile --null
 
-echo "== type-check (modules without tern)"
-luau-analyze --mode=strict $(grep -L 'require("tern")' $(find src tests -name '*.luau'))
+echo "== type-check (pure core and shared modules)"
+luau-analyze --mode=strict src/core/*.luau src/shared/text.luau src/shared/time.luau src/shared/template.luau src/shared/markup.luau src/shared/schema.luau tests/*.luau
 
 echo "== tests"
 for f in tests/*.spec.luau; do

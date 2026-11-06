@@ -3,7 +3,7 @@ local ui = tern.ui
 local text = require("./src/shared/text")
 local lark = require("./src/services/lark")
 
-require("./lib/inbox")
+require("./src/app/host")
 
 local function running(cx)
 	for _, pane in tern.pane.list() do
