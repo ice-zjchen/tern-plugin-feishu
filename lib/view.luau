@@ -3,7 +3,8 @@
 local tern = require("tern")
 local feishu = require("./feishu")
 local settings = require("./settings")
-local time = require("./time")
+local time = require("../src/shared/time")
+local text = require("../src/shared/text")
 local ui = tern.ui
 
 local view = {}
@@ -54,33 +55,6 @@ local function line(spans: any, props: any?): any
 		node.p = p
 	end
 	return node
-end
-
-
--- Display width: CJK and full-width characters take two cells.
-local function width(text: string): number
-	local n = 0
-	for _, c in utf8.codes(text) do
-		n += if c >= 0x1100 then 2 else 1
-	end
-	return n
-end
-
-local function clip(text: string, cells: number): string
-	local flat = string.gsub(string.gsub(text, "%s+", " "), "^ ", "")
-	if width(flat) <= cells then
-		return flat
-	end
-	local out, n = {}, 0
-	for _, c in utf8.codes(flat) do
-		local w = if c >= 0x1100 then 2 else 1
-		if n + w > cells - 1 then
-			break
-		end
-		table.insert(out, utf8.char(c))
-		n += w
-	end
-	return table.concat(out) .. "…"
 end
 
 local function nav(key: string, act: string, label: string, count: number, current: boolean): any
@@ -150,8 +124,8 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 		end
 		local where = if item.chat_type == "p2p" then "私聊" else item.chat
 		local label: { any } = {
-			clip(summary, math.max(6, list_cells - 6)) .. "\n",
-			t(clip(item.name .. " · " .. where, math.max(6, list_cells - width(status[1]) - 4)), "muted"),
+			text.fit(summary, math.max(6, list_cells - 6)) .. "\n",
+			t(text.fit(item.name .. " · " .. where, math.max(6, list_cells - text.cells(status[1]) - 4)), "muted"),
 		}
 		if view.unread(item) then
 			table.insert(label, t(" ●", "accent"))

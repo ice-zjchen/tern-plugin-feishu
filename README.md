@@ -154,7 +154,7 @@ tern plugin link .
 - 自动分析、`/` 和任务页均继承 omp 正常的项目指令（如 `AGENTS.md`）、规则、技能、扩展、MCP、工具及审批策略。插件不再限制内置工具、不禁用 MCP、不强制审批模式，也不添加自动批准参数。若项目策略要求交互确认，无头分析或对话可能被阻塞，应按 `o` 手动开任务继续，而不是绕过确认。
 - **Workspace 不是文件访问沙箱。** 读取到的项目或技能内容可能被发送给模型，包括被消息诱导读取的内容；只配置你愿意让模型访问的环境。
 
-插件任务提示词位于 `lib/agent.luau`：`WORKBENCH` 通过 `--append-system-prompt` 附加到默认系统提示词；`agent.analyze()` 输出判断；`agent.converse()` 处理 `/` 对话；`agent.prepare_task()` 判断最终任务与消息的关联性，再组装新 tab 的第一条消息。项目业务约定放在 Workspace 的 `AGENTS.md` 和各技能的 `SKILL.md` 中，插件不内置任何操作类型。
+提示词在 `prompts/*.md`，每个文件用 `<!-- @名称 -->` 分成若干块，`{{变量}}` 由代码填入，缺变量或多给变量都会直接报错：`system.md` 通过 `--append-system-prompt` 附加到默认系统提示词；`analysis.md` 是初判；`chat.md` 是 `/` 对话；`relevance.md` 是交办前的关联判断；`task.md` 是新任务页的第一条消息。项目业务约定放在 Workspace 的 `AGENTS.md` 和各技能的 `SKILL.md` 中，插件不内置任何操作类型。
 
 ## 和 omp 的关系
 
@@ -192,13 +192,15 @@ tern plugin link .
 - `host.luau`：只读的 @我 面板，并加载工作台。
 - `lib/inbox.luau`：工作台状态、队列、分析调度和审核操作。
 - `lib/view.luau`：工作台和设置页的界面。
-- `lib/time.luau`：消息时间的自然日分层格式。
+- `src/shared/time.luau`：消息时间的自然日分层格式。
+- `src/shared/text.luau`：输入框的文本编辑（UTF-16 光标）、截断和消息链接白名单。
+- `src/shared/template.luau`、`src/services/prompts.luau`：提示词模板的解析、加载和填充。
 - `lib/cache.luau`：本地工作台快照、分析中断恢复及不含运行时句柄的序列化。
 - `lib/settings.luau`：设置项定义和读写。
 - `lib/feishu.luau`：所有 `lark-cli` 调用。
-- `lib/agent.luau`：提示词和所有 omp 调用。
+- `lib/agent.luau`：所有 omp 调用。
 - `lib/runtime.luau`：共用的 omp 工作目录、技能配置、绝对会话路径与原生命令引用。
-- `lib/edit.luau`：输入框的文本编辑。
 - `inbox.css`：终端样式，颜色全部取自 Tern 主题变量。
+- `scripts/check.sh`：编译、对不依赖 tern 的模块做严格类型检查、运行 `tests/`，需要 `brew install luau`。
 
 插件 API 参考：[Tern Plugin SDK](https://docs.stencil.so/tern/)。

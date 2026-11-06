@@ -1,5 +1,6 @@
 local tern = require("tern")
 local ui = tern.ui
+local text = require("./src/shared/text")
 
 require("./lib/inbox")
 
@@ -122,11 +123,7 @@ local function openMessage(state, cx)
 	local message = selected(state)
 	if not message then return end
 	local link = message.message_app_link
-	-- Never execute arbitrary protocols supplied by message content.
-	if type(link) == "string" and (
-		string.match(link, "^https://applink%.feishu%.cn/client/chat/open%?")
-		or string.match(link, "^https://applink%.larksuite%.com/client/chat/open%?")
-	) then
+	if text.is_chat_link(link) then
 		cx:open(link)
 	else
 		cx:toast("error", "该消息没有可用的原消息链接", message.message_id)

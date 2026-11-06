@@ -7,7 +7,7 @@
 -- Reload restores the queue without refetching or replaying interrupted turns.
 
 local tern = require("tern")
-local edit = require("./edit")
+local edit = require("../src/shared/text")
 local feishu = require("./feishu")
 local agent = require("./agent")
 local runtime = require("./runtime")
@@ -1152,11 +1152,7 @@ end
 
 local function open_message(state: any, item: any)
 	local link = item.link
-	-- Never open a protocol a message could supply.
-	if type(link) == "string" and (
-		string.match(link, "^https://applink%.feishu%.cn/client/chat/open%?")
-		or string.match(link, "^https://applink%.larksuite%.com/client/chat/open%?")
-	) then
+	if edit.is_chat_link(link) then
 		state.cx:open(link)
 	else
 		state.cx:toast("error", "该消息没有可用的原消息链接", item.id)
@@ -1182,12 +1178,6 @@ end
 
 local TAB_TITLE_CHARS = 24
 
-local function clip(text: string, chars: number): string
-	text = string.gsub(text, "%s+", " ")
-	local at = utf8.offset(text, chars + 1)
-	return if at then string.sub(text, 1, at - 1) .. "…" else text
-end
-
 -- `TOPIC: text` like other tabs: what it works on, then whose message it came from.
 -- The icon stays the agent's own; Feishu task tabs are marked by colour instead.
 
@@ -1197,7 +1187,7 @@ local function tab_title(item: any, task: string?): string
 		elseif a and a.summary ~= "" then a.summary
 		else feishu.clean(item.content)
 	local who = if item.chat_type == "p2p" then item.name else item.name .. "@" .. item.chat
-	return "飞书: " .. clip(what, TAB_TITLE_CHARS) .. " · " .. clip(who, 16)
+	return "飞书: " .. edit.clip(edit.flat(what), TAB_TITLE_CHARS) .. " · " .. edit.clip(edit.flat(who), 16)
 end
 
 -- Confirmed tasks get a relevance check before opening; direct `o` stays manual.
