@@ -1736,48 +1736,26 @@ local function view_from(saved: any): string
 	return "pending"
 end
 
-local TAB_SEGMENTS = 3
+-- The workbench tab's name: the fixed prefix `飞书｜`, then the counts of the three views
+-- you act from, as the view tabs count them: `飞书｜待处理7·处理中2·稍后1`. Empty views are
+-- left out to keep within Tern's 220px tab name.
+local TAB_VIEWS = { { "pending", "待处理" }, { "doing", "处理中" }, { "later", "稍后" } }
 
--- The workbench tab's name: the fixed prefix `飞书｜`, then each kind as a two-character
--- word with its count, most urgent first: `飞书｜等你1·执行5·分析1`. Tern caps a tab name
--- at 220px (about 17 CJK characters), so at most three kinds show and the rest go to `+N`.
--- A P0 item counts only as 紧急, so the kinds add up to everything that needs you.
 local function tab_name(state: any): string
 	if state.problem and #state.items == 0 then
 		return "飞书｜⚠ 加载失败"
 	elseif state.loading and #state.items == 0 then
 		return "飞书｜加载中…"
 	end
-	local counts = { task = 0, urgent = 0, reply = 0, deep = 0, other = 0 }
-	for _, item in state.items do
-		if not item.hidden and view.task_needs_me(item) then
-			counts.task += 1
-		elseif pending(item) then
-			local a = item.analysis
-			local status = view.status(item)
-			if a and a.pri == "P0" and (status == "reply" or status == "deep") then
-				counts.urgent += 1
-			elseif status == "reply" then
-				counts.reply += 1
-			elseif status == "deep" then
-				counts.deep += 1
-			else
-				counts.other += 1
-			end
+	local segments = {}
+	for _, def in TAB_VIEWS do
+		local n = 0
+		for _, item in state.items do
+			n += if shows({ view = def[1] }, item) then 1 else 0
 		end
-	end
-	local segments, rest = {}, 0
-	for _, part in { { counts.task, "等你" }, { counts.urgent, "紧急" }, { counts.reply, "回复" }, { counts.deep, "执行" }, { counts.other, "分析" } } do
-		if part[1] > 0 then
-			if #segments < TAB_SEGMENTS then
-				table.insert(segments, part[2] .. tostring(part[1]))
-			else
-				rest += part[1]
-			end
+		if n > 0 then
+			table.insert(segments, def[2] .. tostring(n))
 		end
-	end
-	if rest > 0 then
-		table.insert(segments, "+" .. tostring(rest))
 	end
 	local name = "飞书｜" .. (if #segments > 0 then table.concat(segments, "·") else "已清空")
 	return if state.problem then name .. " ⚠" else name
