@@ -1103,15 +1103,41 @@ local function hand_off(state: any, item: any)
 	end
 end
 
--- Opens a new omp tab on this message. `task` is what you confirmed; nil opens it
--- for you to drive.
+-- Confirmed tasks get a relevance check before opening; direct `o` stays manual.
 local function start_task(state: any, item: any, task: string?)
-	item.task_state, item.task_raw, item.result = "starting", nil, nil
-	resolve(state, item, "doing", "已开 omp")
-	load_thread(state, item, function()
-		runtime.set_task(item.id, { prompt = agent.task_prompt(item, feishu.clean, task), state = "starting" })
-		state.cx:open(TASK_LINK .. item.id)
-	end)
+	if item.preparing_task then
+		return
+	end
+	item.preparing_task = true
+	local latest, content, triage = item.latest_id or item.id, item.content, item.triage
+	state.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在准备 omp…"
+	local function prepare()
+		agent.prepare_task(item, feishu.clean, task, extras(state, item).notice, function(prompt, cost, err)
+			state.spent += cost
+			item.preparing_task = nil
+			if not alive(state) then
+				return
+			end
+			if latest ~= (item.latest_id or item.id) or content ~= item.content or triage ~= item.triage
+				or item.hidden or (task ~= nil and (task ~= task_text(item) or view.stale(item))) then
+				state.flash = "任务或消息已变化，请重新确认后交办"
+			elseif err then
+				state.flash = "交办前分析失败，请重新交办"
+				state.cx:toast("error", state.flash, err)
+			else
+				item.task_state, item.task_raw, item.result = "starting", nil, nil
+				runtime.set_task(item.id, { prompt = prompt, state = "starting" })
+				resolve(state, item, "doing", "已开 omp")
+				state.cx:open(TASK_LINK .. item.id)
+			end
+			render(state)
+		end)
+	end
+	if task then
+		load_thread(state, item, prepare)
+	else
+		prepare()
+	end
 end
 
 -- What `a` does is what the row says it will.
