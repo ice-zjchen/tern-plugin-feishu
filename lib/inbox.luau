@@ -637,7 +637,7 @@ local function absorb(state: any, head: any, item: any)
 	if was == "doing" then
 		-- Third-party words never go into a running task by themselves.
 		head.task_new = (head.task_new or 0) + 1
-		log(state, "agent", item.name .. "：omp 处理中又有新消息")
+		log(state, "agent", item.name .. "：任务执行中又有新消息")
 		return
 	end
 	if was then
@@ -887,8 +887,8 @@ local function sync_tasks(state: any): boolean
 						item.triage = nil
 						record(all_ids(item), nil)
 					end
-					state.flash = "omp 本轮结束，请确认结果：" .. item.name
-					log(state, "omp", "本轮结束：" .. item.name)
+					state.flash = "任务本轮结束，请核对结果：" .. item.name
+					log(state, "omp", "任务本轮结束：" .. item.name)
 					reselect(state, nil)
 				end
 			end
@@ -1205,7 +1205,7 @@ local function start_task(state: any, item: any, task: string?)
 	end
 	item.preparing_task = true
 	local latest, content, triage = item.latest_id or item.id, item.content, item.triage
-	state.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在准备 omp…"
+	state.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在打开任务页…"
 	local function prepare()
 		agent.prepare_task(item, feishu.clean, task, extras(state, item).notice, function(prompt, cost, err)
 			state.spent += cost
@@ -1222,7 +1222,7 @@ local function start_task(state: any, item: any, task: string?)
 			else
 				item.task_state, item.task_raw, item.result = "starting", nil, nil
 				runtime.set_task(item.id, { prompt = prompt, state = "starting", title = tab_title(item, task) })
-				resolve(state, item, "doing", "已开 omp")
+				resolve(state, item, "doing", "已开始任务")
 				state.cx:open(TASK_LINK .. item.id)
 			end
 			render(state)
@@ -1301,15 +1301,15 @@ local function run_command(state: any)
 		return
 	end
 	if item.no_agent then
-		state.flash = "这条不交给 agent。按 g 让 omp 分析后再聊"
+		state.flash = "这条不交给 AI。按 g 让 AI 分析后再聊"
 		return
 	end
 	state.command, state.command_cursor = "", 0
 	state.talking = item.id
 	item.talk = item.talk or {}
 	table.insert(item.talk, { me = true, text = said })
-	state.flash = "omp 正在回答…"
-	log(state, "你", "对 omp 说：" .. said)
+	state.flash = "AI 正在回答…"
+	log(state, "你", "对 AI 说：" .. said)
 	cache.save(state)
 	load_thread(state, item, function()
 		local current_judgment = {
@@ -1326,11 +1326,11 @@ local function run_command(state: any)
 			end
 			if err then
 				table.insert(item.talk, { text = "（失败）" .. err })
-				state.flash = "omp 回答失败"
-				log(state, "omp", "回答失败：" .. err)
+				state.flash = "AI 回答失败"
+				log(state, "omp", "AI 回答失败：" .. err)
 			else
 				table.insert(item.talk, { text = reply :: string })
-				state.flash = "omp 已回答"
+				state.flash = "AI 已回答"
 				if change.state or change.draft or change.task then
 					if not item.analysis then
 						item.agent = "done"
@@ -1348,7 +1348,7 @@ local function run_command(state: any)
 					if item.id == state.selected then
 						state.draft_cursor = edit.len(field_text(item))
 					end
-					state.flash = "omp 已更新判断"
+					state.flash = "AI 已更新判断"
 					reselect(state, nil)
 				end
 			end
@@ -1465,7 +1465,7 @@ local function set_chat_rule(state: any, item: any, mode: string)
 	local at = index_in(visible(state), item.id)
 	state.flash = if not rule then "已移除规则：" .. item.chat
 		elseif mode == "hide" then "不再显示：" .. item.chat
-		else "不再交给 agent：" .. item.chat
+		else "不再交给 AI 分析：" .. item.chat
 	log(state, "你", state.flash)
 	reselect(state, at)
 	pump(state)
@@ -1632,7 +1632,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 			state.cx:open(TASK_LINK .. item.id)
 		else
 			start_task(state, item, nil)
-			log(state, "你", "用 omp 打开：" .. item.name)
+			log(state, "你", "手动开任务：" .. item.name)
 		end
 	elseif name == "force" then
 		force_analysis(state, item)

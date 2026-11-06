@@ -14,7 +14,7 @@ view.QUEUE_PREFIX = "main.body.middle.queue.items."
 
 view.STATUS = {
 	queued = { "待分析", "muted" },
-	manual = { "不交给 agent", "muted" },
+	manual = { "不交给 AI", "muted" },
 	running = { "分析中", "info" },
 	failed = { "分析失败", "warning" },
 	deep = { "待执行", "muted" },
@@ -22,11 +22,11 @@ view.STATUS = {
 	fyi = { "可忽略", "muted" },
 	snoozed = { "稍后", "muted" },
 	handoff = { "待你发送", "accent" },
-	task_starting = { "omp 启动中", "muted" },
-	task_working = { "omp 执行中", "muted" },
-	task_waiting = { "omp 等你", "warning" },
+	task_starting = { "任务启动中", "muted" },
+	task_working = { "任务执行中", "muted" },
+	task_waiting = { "任务等你回复", "warning" },
 	task_done = { "本轮结束 / 待确认", "warning" },
-	task_closed = { "tab 已关闭", "warning" },
+	task_closed = { "任务页已关闭", "warning" },
 	sent = { "已发送", "muted" },
 	archived = { "已归档", "muted" },
 	replied = { "已回复", "muted" },
@@ -146,7 +146,7 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 		local timestamp, full_time = time.format(item.time)
 		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else feishu.clean(item.content)
 		if (item.task_new or 0) > 0 then
-			status = { "omp 中有新消息", "warning" }
+			status = { "任务期间有新消息", "warning" }
 		end
 		local where = if item.chat_type == "p2p" then "私聊" else item.chat
 		local label: { any } = {
@@ -334,7 +334,7 @@ local function run_block(item: any): any?
 		return folded("run", "分析记录 · 未记录", {
 			line({ t("这条的分析没有留下记录。下面是当前设置，不一定是当时用的。", "muted") }),
 			ui.kv({
-				kv_row("模型", if model ~= "" then model else "omp 默认"),
+				kv_row("模型", if model ~= "" then model else "默认"),
 				kv_row("Workspace", { t(if workspace ~= "" then workspace else "插件数据目录", "path") }),
 			}),
 		})
@@ -362,9 +362,9 @@ local function run_block(item: any): any?
 	end
 	local rows = {
 		kv_row("模型", (if run.provider then run.provider .. " / " else "") .. (run.model or "未知")),
-		kv_row("思考强度", if run.thinking and run.thinking ~= "default" then run.thinking else "omp 默认"),
+		kv_row("思考强度", if run.thinking and run.thinking ~= "default" then run.thinking else "默认"),
 		kv_row("Workspace", { t(if run.cwd then short_path(run.cwd) else "未知", "path") }),
-		kv_row("Skills", if run.skills then { t(short_path(run.skills), "path") } else "沿用 omp 配置"),
+		kv_row("Skills", if run.skills then { t(short_path(run.skills), "path") } else "沿用默认配置"),
 		kv_row("内容", if run.incremental then "沿用会话，只发送新消息" else "新会话，完整上下文"),
 		kv_row("时间", tostring(run.at or "未知") .. " · 用时 " .. tostring(run.seconds or 0) .. " 秒"),
 	}
@@ -412,7 +412,7 @@ local function analysis_block(state: any, item: any): any
 		table.insert(children, line({ t(followup, "warning") }, { key = "followup" }))
 	end
 	if a and a.manual then
-		table.insert(children, line({ t("这条由你处理，omp 没有判断过。", "muted") }))
+		table.insert(children, line({ t("这条由你处理，AI 没有判断过。", "muted") }))
 	elseif status == "failed" then
 		table.insert(children, line({ t("分析失败：" .. tostring(item.agent_error), "warning") }))
 		table.insert(children, ui.node("row", { key = "retry" }, {
@@ -423,7 +423,7 @@ local function analysis_block(state: any, item: any): any
 	elseif status == "queued" and (item.settle_at or 0) > os.time() then
 		table.insert(children, line({ t("对话还在继续，停一会儿再判断。", "muted") }))
 	elseif not a and not item.triage then
-		local why = if status == "manual" then "按设置，这条不交给 agent。"
+		local why = if status == "manual" then "按设置，这条不交给 AI 分析。"
 			elseif not settings.get("agent_enabled") then "自动分析已关闭。"
 			else "这条消息还没有分析，选中后会排队。"
 		table.insert(children, line({ t(why, "muted") }))
@@ -434,9 +434,9 @@ end
 -- Talks to the analysis session, which can change the judgment, the draft and the task.
 -- It cannot reach a running omp tab, so those states don't offer it.
 local function correction(state: any, kind: string?): any
-	local label = if kind == "deep" then "让 omp 改判断或任务说明，不会启动任务"
-		elseif kind == "reply" then "让 omp 改这条回复或判断"
-		else "让 omp 调整判断"
+	local label = if kind == "deep" then "让 AI 改判断或任务说明，不会开始任务"
+		elseif kind == "reply" then "让 AI 改这条回复或判断"
+		else "让 AI 调整判断"
 	local placeholder = if kind == "reply" then "例如：语气正式一点；或者这条要深入处理" else "例如：不用深入，回一句就行"
 	return ui.node("col", { key = "correction", role = "fl.correction", gap = "sm" }, {
 		line({ t(label, "muted") }),
@@ -456,7 +456,7 @@ local function primary_button(item: any, variant: string): any
 	if view.needs_confirm(item) then
 		-- No shortcut on purpose: a stray `a` must not start this one.
 		props.actions = { click = "confirm-task" }
-		return ui.button("确认，开 omp 执行", props)
+		return ui.button("确认并开始任务", props)
 	end
 	props.keys = { "a" }
 	return ui.button(action.label, props)
@@ -472,33 +472,33 @@ local function task_card(state: any, item: any, facts: any): any
 		table.insert(children, ui.node("row", { key = "actions", role = "fl.actions", gap = "sm", wrap = true }, { ... }))
 	end
 	if status == "task_done" then
-		head("omp 本轮结果 · 请核对")
-		table.insert(children, line({ t("这是 omp 的原话。本轮结束不代表任务完成。", "muted") }))
+		head("任务本轮结果 · 请核对")
+		table.insert(children, line({ t("这是任务里 AI 的原话。本轮结束不代表任务完成。", "muted") }))
 		if item.result and string.find(item.result, "%S") then
 			table.insert(children, line(item.result, { key = "result", role = "fl.result" }))
 		else
-			table.insert(children, line({ t("omp 没有留下文字结果，请到 tab 里查看。", "muted") }))
+			table.insert(children, line({ t("这一轮没有文字结果，请到任务页查看。", "muted") }))
 		end
 		buttons(
 			primary_button(item, "primary"),
 			ui.button("确认完成并归档", { key = "archive", variant = "quiet", keys = { "x" }, actions = { click = "archive" } })
 		)
 	elseif status == "task_waiting" then
-		head("omp 在等你")
-		table.insert(children, line("它的问题在 omp tab 里，回答也在那里进行。"))
+		head("任务在等你回复")
+		table.insert(children, line("问题在任务页里，回答也在那里进行。"))
 		buttons(primary_button(item, "primary"))
 	elseif status == "task_closed" then
-		head("omp tab 已关闭")
+		head("任务页已关闭")
 		table.insert(children, line("任务可能没做完。可以重新打开，或者确认后归档。"))
 		buttons(primary_button(item, "primary"))
 	else
-		head(if status == "task_starting" then "omp 启动中" else "omp 正在处理")
-		table.insert(children, line("不需要留在这里等待。omp 等你，或本轮结束时，这条会回到「需要我」。"))
-		table.insert(children, line({ t("要补充要求，到 omp tab 里说。这里的内容到不了正在运行的任务。", "muted") }))
+		head(if status == "task_starting" then "任务启动中" else "任务执行中")
+		table.insert(children, line("不用在这里等。任务需要你回复或本轮结束时，这条会回到「需要我」。"))
+		table.insert(children, line({ t("要补充要求，到任务页里说。这里的内容到不了正在运行的任务。", "muted") }))
 		buttons(primary_button(item, "quiet"))
 	end
 	if (item.task_new or 0) > 0 then
-		table.insert(children, line({ t("任务开始后又有 " .. tostring(item.task_new) .. " 条新消息，不会自动发给 omp。需要的话到 tab 里告诉它。", "warning") }, { key = "task-new" }))
+		table.insert(children, line({ t("任务开始后又有 " .. tostring(item.task_new) .. " 条新消息，不会自动发到任务里。需要的话到任务页里补充。", "warning") }, { key = "task-new" }))
 	end
 	if status ~= "task_done" and item.analysis and item.analysis.state == "deep" and string.find(facts.draft, "%S") then
 		table.insert(children, folded("scope", "执行中的任务", { line(facts.draft, { role = "fl.plan" }) }))
@@ -547,10 +547,10 @@ local function next_block(state: any, item: any, facts: any): any
 	elseif kind == "deep" and not locked and view.needs_confirm(item) then
 		table.insert(children, ui.node("col", { key = "risk", role = "fl.risk", gap = "xs" }, {
 			line({ t("对方要的动作：", "warning"), t(item.analysis.risk, "warning strong") }),
-			line({ t("上面的要求只是任务说明，不是权限限制。omp 按项目配置运行，有权限时可能真的执行。", "muted") }),
+			line({ t("上面的要求只是任务说明，不是权限限制。任务按项目配置运行，有权限时可能真的执行。", "muted") }),
 		}))
 	elseif kind == "deep" and not locked then
-		table.insert(children, line({ t("确认后在新 tab 运行，开始前可以先改。", "muted") }))
+		table.insert(children, line({ t("确认后在新的任务页运行，开始前可以先改。", "muted") }))
 	end
 	if item.spoken then
 		table.insert(children, line({
@@ -573,9 +573,9 @@ local function next_block(state: any, item: any, facts: any): any
 		end
 		if not editable then
 			if status == "manual" or (item.analysis and item.analysis.manual) then
-				table.insert(buttons, ui.button("让 omp 分析", { key = "force", variant = "quiet", keys = { "g" }, actions = { click = "force" } }))
+				table.insert(buttons, ui.button("让 AI 分析", { key = "force", variant = "quiet", keys = { "g" }, actions = { click = "force" } }))
 			end
-			table.insert(buttons, ui.button("直接开 omp", { key = "omp", variant = "quiet", keys = { "o" }, title = "不管判断如何，直接开 omp 处理这条消息", actions = { click = "omp" } }))
+			table.insert(buttons, ui.button("手动开任务", { key = "omp", variant = "quiet", keys = { "o" }, title = "不按 AI 的判断，带上这条消息开一个任务页，等你下指令", actions = { click = "omp" } }))
 		end
 		table.insert(children, ui.node("row", { key = "actions", role = "fl.actions", gap = "sm", wrap = true }, buttons))
 	end
@@ -589,11 +589,11 @@ local function conversation(state: any, item: any): any
 	local children = {}
 	for _, entry in item.talk or {} do
 		table.insert(children, line({
-			t(if entry.me then "你  " else "omp  ", if entry.me then "accent" else "info"), entry.text,
+			t(if entry.me then "你  " else "AI  ", if entry.me then "accent" else "info"), entry.text,
 		}, { role = "fl.talk" }))
 	end
 	if state.talking == item.id then
-		table.insert(children, line({ t("omp 正在回答…", "info") }))
+		table.insert(children, line({ t("AI 正在回答…", "info") }))
 	end
 	return ui.node("col", { key = "conversation", role = "fl.conversation", gap = "sm" }, children)
 end
@@ -656,8 +656,8 @@ local function header(state: any, facts: any): any
 	return ui.node("col", { key = "head", gap = "none" }, lines)
 end
 
-local KEYS = { "j/k 上下", "a 下一步", "o omp", "6 @我", "7 私聊" }
-local ADJUST_KEYS = { "j/k 上下", "a 下一步", "e 修改", "/ 让 omp 调整", "o omp", "6 @我", "7 私聊" }
+local KEYS = { "j/k 上下", "a 下一步", "o 手动开任务", "6 @我", "7 私聊" }
+local ADJUST_KEYS = { "j/k 上下", "a 下一步", "e 修改", "/ 让 AI 调整", "o 手动开任务", "6 @我", "7 私聊" }
 local SETTINGS_KEYS = { "j/k 上下", "空格 切换", "←/→ 换值", "Esc 返回" }
 
 local function dock(state: any, facts: any, narrow: boolean): any
@@ -742,7 +742,7 @@ local function rules_block(state: any): any
 	for _, id in ids do
 		local rule = rules[id]
 		table.insert(rows, ui.node("row", { key = id, justify = "between", gap = "md", role = "fl.field" }, {
-			line({ tostring(rule.name), t(if rule.mode == "hide" then "  不显示" else "  不交给 agent", "muted") }),
+			line({ tostring(rule.name), t(if rule.mode == "hide" then "  不显示" else "  不交给 AI 分析", "muted") }),
 			ui.node("row", { key = "actions", gap = "xs" }, {
 				ui.button(if rule.mode == "hide" then "改为不分析" else "改为不显示", { key = "mode", size = "sm", actions = { click = "rule-mode=" .. id } }),
 				ui.button("移除", { key = "del", size = "sm", actions = { click = "rule-del=" .. id } }),
@@ -750,7 +750,7 @@ local function rules_block(state: any): any
 		}))
 	end
 	if #rows == 0 then
-		table.insert(rows, line({ t("在队列里按 i 不显示某个会话，按 n 让它显示但不交给 agent。", "muted") }))
+		table.insert(rows, line({ t("在队列里按 i 不显示某个会话，按 n 让它显示但不交给 AI 分析。", "muted") }))
 	end
 	return settings_group("rules", "6", "会话规则", tostring(#ids) .. " 条", rows)
 end
@@ -874,13 +874,13 @@ end
 function view.next_action(item: any): { key: string, label: string }
 	local status = view.status(item)
 	if status == "task_done" then
-		return { key = "jump", label = "继续到 omp" }
+		return { key = "jump", label = "回到任务继续" }
 	elseif status == "task_closed" then
-		return { key = "reopen", label = "重新开 omp" }
+		return { key = "reopen", label = "重新开始任务" }
 	elseif status == "task_waiting" then
-		return { key = "jump", label = "到 omp 回答" }
+		return { key = "jump", label = "去任务页回答" }
 	elseif item.triage == "doing" then
-		return { key = "jump", label = "跳到 omp" }
+		return { key = "jump", label = "查看任务" }
 	elseif status == "handoff" then
 		return { key = "copy", label = "再次复制并去飞书" }
 	elseif view.locked(item) or not item.analysis then
@@ -890,7 +890,7 @@ function view.next_action(item: any): { key: string, label: string }
 	end
 	local kind = item.analysis.state
 	if kind == "deep" then
-		return { key = "task", label = "开 omp 执行" }
+		return { key = "task", label = "开始任务" }
 	elseif kind == "fyi" then
 		return { key = "archive", label = "归档" }
 	end

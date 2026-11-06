@@ -7,7 +7,7 @@ local settings = {}
 
 -- `column` is where a group sits on the settings page; j/k follow this order.
 settings.GROUPS = {
-	{ id = "agent", column = "left", number = "1", title = "Agent（omp）" },
+	{ id = "agent", column = "left", number = "1", title = "AI 分析" },
 	{ id = "environment", column = "left", number = "2", title = "模型与目录" },
 	{ id = "sources", column = "right", number = "3", title = "消息来源" },
 	{ id = "filters", column = "right", number = "4", title = "过滤" },
@@ -15,17 +15,17 @@ settings.GROUPS = {
 }
 
 settings.FIELDS = {
-	{ id = "agent_enabled", group = "agent", kind = "switch", default = true, label = "自动分析", hint = "关闭后按 g 才让 omp 分析" },
+	{ id = "agent_enabled", group = "agent", kind = "switch", default = true, label = "自动分析", hint = "关闭后按 g 才让 AI 分析" },
 	{ id = "concurrency", group = "agent", kind = "choice", default = 2, choices = { 1, 2, 3, 5 }, label = "并发数" },
 	{ id = "backlog", group = "agent", kind = "choice", default = 30, choices = { 0, 10, 30, 50, 100 }, label = "打开时分析积压" },
 	{ id = "thread_size", group = "agent", kind = "choice", default = 10, choices = { 5, 10, 20, 50 }, label = "会话上下文条数" },
 	{ id = "use_agenda", group = "agent", kind = "switch", default = true, label = "提供今日日程", hint = "需要日历权限" },
-	{ id = "agent_images", group = "agent", kind = "switch", default = true, label = "把图片发给 omp", hint = "触发消息里的图片，最多 3 张" },
+	{ id = "agent_images", group = "agent", kind = "switch", default = true, label = "把图片发给 AI", hint = "触发消息里的图片，最多 3 张" },
 
 	{ id = "thinking", group = "environment", kind = "choice", default = "default", choices = { "default", "off", "low", "medium", "high" }, label = "思考强度" },
-	{ id = "model", group = "environment", kind = "text", default = "", label = "模型", hint = "如 opus；留空用 omp 默认模型" },
-	{ id = "workspace", group = "environment", kind = "text", default = "", label = "Workspace 目录", hint = "omp 启动目录，支持绝对路径或 ~/；留空或不存在时用插件数据目录" },
-	{ id = "skills_dir", group = "environment", kind = "text", default = "", label = "Skills 目录", hint = "额外技能目录，相对 Workspace；留空用 omp 默认发现规则" },
+	{ id = "model", group = "environment", kind = "text", default = "", label = "模型", hint = "如 opus；留空用默认模型" },
+	{ id = "workspace", group = "environment", kind = "text", default = "", label = "Workspace 目录", hint = "AI 分析和任务的启动目录，支持绝对路径或 ~/；留空或不存在时用插件数据目录" },
+	{ id = "skills_dir", group = "environment", kind = "text", default = "", label = "Skills 目录", hint = "额外技能目录，相对 Workspace；留空用默认发现规则" },
 
 	{ id = "source_mention", group = "sources", kind = "switch", default = true, label = "@我" },
 	{ id = "source_dm", group = "sources", kind = "switch", default = true, label = "私聊" },

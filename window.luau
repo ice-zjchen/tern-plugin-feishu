@@ -39,7 +39,7 @@ local function setting(id: string, title: string, key: string, placeholder: stri
 	})
 end
 
-setting("agent", "飞书 Feishu / Lark：设置 omp 路径", "agent", "omp 可执行文件路径（留空自动查找）")
+setting("agent", "飞书 Feishu / Lark：设置 AI 程序路径", "agent", "AI 程序可执行文件路径（留空自动查找）")
 
 -- Which task each omp tab belongs to. Only this half writes it.
 local function panes(): { [string]: string }
@@ -93,7 +93,7 @@ tern.route.link(function(link, cx)
 		local program = if type(configured) == "string" and configured ~= "" then configured else "omp"
 		local launch = runtime.prepare()
 		if launch.warning then
-			cx:toast("info", "omp 工作目录已回退", launch.warning)
+			cx:toast("info", "工作目录已回退", launch.warning)
 		end
 		local cwd = runtime.task_workspace(task.prompt, launch.cwd)
 		-- A different workspace must discover its own config, skills and rules.
@@ -119,7 +119,7 @@ tern.route.link(function(link, cx)
 	end)
 	if not ok then
 		update(id, { state = "closed" })
-		cx:toast("error", "无法打开 omp", tostring(err))
+		cx:toast("error", "无法开始任务", tostring(err))
 	end
 	return { handled = true }
 end)
