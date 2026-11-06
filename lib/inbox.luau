@@ -1738,12 +1738,13 @@ end
 
 -- The workbench tab's name: the fixed prefix `飞书｜`, then the counts of the three views
 -- you act from, as the view tabs count them: `飞书｜待处理7·处理中2·稍后1`. Empty views are
--- left out to keep within Tern's 220px tab name.
+-- left out to keep within Tern's 220px tab name. Problems are explained in the workbench
+-- header, not flagged here; only a queue that never loaded says so.
 local TAB_VIEWS = { { "pending", "待处理" }, { "doing", "处理中" }, { "later", "稍后" } }
 
 local function tab_name(state: any): string
 	if state.problem and #state.items == 0 then
-		return "飞书｜⚠ 加载失败"
+		return "飞书｜加载失败"
 	elseif state.loading and #state.items == 0 then
 		return "飞书｜加载中…"
 	end
@@ -1757,8 +1758,7 @@ local function tab_name(state: any): string
 			table.insert(segments, def[2] .. tostring(n))
 		end
 	end
-	local name = "飞书｜" .. (if #segments > 0 then table.concat(segments, "·") else "已清空")
-	return if state.problem then name .. " ⚠" else name
+	return "飞书｜" .. (if #segments > 0 then table.concat(segments, "·") else "已清空")
 end
 
 tern.block.define("inbox", {
