@@ -105,6 +105,13 @@ tern.route.link(function(link, cx)
 			command = runtime.quote(program) .. " --cwd " .. runtime.quote(cwd) .. " --allow-home" .. config,
 			how = "tab",
 		})
+		-- A name is a convenience: failing to set it must not fail the started task.
+		pcall(function()
+			local tab = cx.session:tab_of(pane)
+			if tab and type(task.title) == "string" and task.title ~= "" then
+				cx.layout:name_tab(tab, task.title)
+			end
+		end)
 		local map = panes()
 		map[tostring(pane)] = id
 		tern.kv.set("task_panes", map)

@@ -17,7 +17,7 @@ view.STATUS = {
 	manual = { "不交给 agent", "muted" },
 	running = { "分析中", "info" },
 	failed = { "分析失败", "warning" },
-	deep = { "待交办", "muted" },
+	deep = { "待执行", "muted" },
 	reply = { "待回复", "muted" },
 	fyi = { "可忽略", "muted" },
 	snoozed = { "稍后", "muted" },
@@ -456,7 +456,7 @@ local function primary_button(item: any, variant: string): any
 	if view.needs_confirm(item) then
 		-- No shortcut on purpose: a stray `a` must not start this one.
 		props.actions = { click = "confirm-task" }
-		return ui.button("确认，交给 omp", props)
+		return ui.button("确认，开 omp 执行", props)
 	end
 	props.keys = { "a" }
 	return ui.button(action.label, props)
@@ -501,7 +501,7 @@ local function task_card(state: any, item: any, facts: any): any
 		table.insert(children, line({ t("任务开始后又有 " .. tostring(item.task_new) .. " 条新消息，不会自动发给 omp。需要的话到 tab 里告诉它。", "warning") }, { key = "task-new" }))
 	end
 	if status ~= "task_done" and item.analysis and item.analysis.state == "deep" and string.find(facts.draft, "%S") then
-		table.insert(children, folded("scope", "已交办的任务", { line(facts.draft, { role = "fl.plan" }) }))
+		table.insert(children, folded("scope", "执行中的任务", { line(facts.draft, { role = "fl.plan" }) }))
 	end
 	return ui.node("col", { key = "reply", role = "fl.task", gap = "md" }, children)
 end
@@ -515,7 +515,7 @@ local function next_block(state: any, item: any, facts: any): any
 	local kind = item.analysis and item.analysis.state
 	local editable = kind == "deep" or kind == "reply"
 	local title = if locked then view.STATUS[status][1]
-		elseif kind == "deep" then "交给 omp 处理"
+		elseif kind == "deep" then "需要深入处理"
 		elseif kind == "reply" then (if status == "handoff" then "待你发送" else "回复给 " .. item.name)
 		else "下一步"
 	local children: { any } = { line({ t(title, "strong") }, { key = "head", role = "fl.task.title" }) }
@@ -573,7 +573,7 @@ local function next_block(state: any, item: any, facts: any): any
 		end
 		if not editable then
 			if status == "manual" or (item.analysis and item.analysis.manual) then
-				table.insert(buttons, ui.button("交给 omp 分析", { key = "force", variant = "quiet", keys = { "g" }, actions = { click = "force" } }))
+				table.insert(buttons, ui.button("让 omp 分析", { key = "force", variant = "quiet", keys = { "g" }, actions = { click = "force" } }))
 			end
 			table.insert(buttons, ui.button("直接开 omp", { key = "omp", variant = "quiet", keys = { "o" }, title = "不管判断如何，直接开 omp 处理这条消息", actions = { click = "omp" } }))
 		end
@@ -890,7 +890,7 @@ function view.next_action(item: any): { key: string, label: string }
 	end
 	local kind = item.analysis.state
 	if kind == "deep" then
-		return { key = "task", label = "交给 omp" }
+		return { key = "task", label = "开 omp 执行" }
 	elseif kind == "fyi" then
 		return { key = "archive", label = "归档" }
 	end

@@ -1180,6 +1180,24 @@ local function hand_off(state: any, item: any)
 	end
 end
 
+local TAB_TITLE_CHARS = 24
+
+local function clip(text: string, chars: number): string
+	text = string.gsub(text, "%s+", " ")
+	local at = utf8.offset(text, chars + 1)
+	return if at then string.sub(text, 1, at - 1) .. "…" else text
+end
+
+-- The tab's name: what it works on, then whose message it came from.
+local function tab_title(item: any, task: string?): string
+	local a = item.analysis
+	local what = if task and a and a.task and a.task.title ~= "" then a.task.title
+		elseif a and a.summary ~= "" then a.summary
+		else feishu.clean(item.content)
+	local who = if item.chat_type == "p2p" then item.name else item.name .. "@" .. item.chat
+	return "飞书｜" .. clip(what, TAB_TITLE_CHARS) .. " · " .. clip(who, 16)
+end
+
 -- Confirmed tasks get a relevance check before opening; direct `o` stays manual.
 local function start_task(state: any, item: any, task: string?)
 	if item.preparing_task then
@@ -1197,13 +1215,13 @@ local function start_task(state: any, item: any, task: string?)
 			end
 			if latest ~= (item.latest_id or item.id) or content ~= item.content or triage ~= item.triage
 				or item.hidden or (task ~= nil and (task ~= task_text(item) or view.stale(item))) then
-				state.flash = "任务或消息已变化，请重新确认后交办"
+				state.flash = "任务或消息已变化，请重新确认后再执行"
 			elseif err then
-				state.flash = "交办前分析失败，请重新交办"
+				state.flash = "执行前分析失败，请重试"
 				state.cx:toast("error", state.flash, err)
 			else
 				item.task_state, item.task_raw, item.result = "starting", nil, nil
-				runtime.set_task(item.id, { prompt = prompt, state = "starting" })
+				runtime.set_task(item.id, { prompt = prompt, state = "starting", title = tab_title(item, task) })
 				resolve(state, item, "doing", "已开 omp")
 				state.cx:open(TASK_LINK .. item.id)
 			end
@@ -1283,7 +1301,7 @@ local function run_command(state: any)
 		return
 	end
 	if item.no_agent then
-		state.flash = "这条不交给 agent。按 g 交给 omp 后再聊"
+		state.flash = "这条不交给 agent。按 g 让 omp 分析后再聊"
 		return
 	end
 	state.command, state.command_cursor = "", 0
@@ -1588,7 +1606,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 		state.dialog = { id = item.id }
 	elseif name == "primary" then
 		if view.needs_confirm(item) then
-			state.flash = "这条涉及" .. item.analysis.risk .. "，请点击按钮确认后再交给 omp"
+			state.flash = "这条涉及" .. item.analysis.risk .. "，请点击按钮确认后再执行"
 		else
 			primary(state, item)
 		end

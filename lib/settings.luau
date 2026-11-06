@@ -15,7 +15,7 @@ settings.GROUPS = {
 }
 
 settings.FIELDS = {
-	{ id = "agent_enabled", group = "agent", kind = "switch", default = true, label = "自动分析", hint = "关闭后按 g 才交给 omp" },
+	{ id = "agent_enabled", group = "agent", kind = "switch", default = true, label = "自动分析", hint = "关闭后按 g 才让 omp 分析" },
 	{ id = "concurrency", group = "agent", kind = "choice", default = 2, choices = { 1, 2, 3, 5 }, label = "并发数" },
 	{ id = "backlog", group = "agent", kind = "choice", default = 30, choices = { 0, 10, 30, 50, 100 }, label = "打开时分析积压" },
 	{ id = "thread_size", group = "agent", kind = "choice", default = 10, choices = { 5, 10, 20, 50 }, label = "会话上下文条数" },
