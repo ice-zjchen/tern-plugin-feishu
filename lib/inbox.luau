@@ -19,7 +19,7 @@ local DECISION_TTL = 30 * 86400
 local MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 local VIEWS = {
-	{ id = "pending", label = "需要我" },
+	{ id = "pending", label = "待处理" },
 	{ id = "doing", label = "处理中" },
 	{ id = "later", label = "稍后" },
 	{ id = "done", label = "已处理" },
@@ -647,7 +647,7 @@ local function absorb(state: any, head: any, item: any)
 		if state.undo and state.undo.id == head.id then
 			state.undo = nil
 		end
-		state.flash = item.name .. " 又 @ 了你，已放回需要我"
+		state.flash = item.name .. " 又 @ 了你，已放回待处理"
 		log(state, "agent", state.flash)
 	end
 	if head.agent == "running" then
@@ -1644,7 +1644,7 @@ local function act(state: any, name: string, value: string?, cx: any)
 			state.undo = nil
 			record(all_ids(item), nil)
 			item.triage = nil
-			state.flash = "已移回需要我：" .. item.name
+			state.flash = "已移回待处理：" .. item.name
 			reselect(state, nil)
 		elseif not view.locked(item) then
 			resolve(state, item, "snoozed", "稍后处理")

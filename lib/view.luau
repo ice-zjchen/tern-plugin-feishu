@@ -394,7 +394,7 @@ local function analysis_block(state: any, item: any): any
 	end
 	local tools: { any } = {}
 	if status ~= "task_starting" and status ~= "task_working" and not view.locked(item) then
-		table.insert(tools, ui.button(if status == "snoozed" then "移回需要我" else "稍后", { key = "snooze", size = "sm", variant = "quiet", keys = { "s" }, actions = { click = "snooze" } }))
+		table.insert(tools, ui.button(if status == "snoozed" then "移回待处理" else "稍后", { key = "snooze", size = "sm", variant = "quiet", keys = { "s" }, actions = { click = "snooze" } }))
 		if view.next_action(item).key ~= "archive" and status ~= "task_done" then
 			table.insert(tools, ui.button("归档", { key = "archive", size = "sm", variant = "quiet", keys = { "x" }, actions = { click = "archive" } }))
 		end
@@ -493,7 +493,7 @@ local function task_card(state: any, item: any, facts: any): any
 		buttons(primary_button(item, "primary"))
 	else
 		head(if status == "task_starting" then "任务启动中" else "任务执行中")
-		table.insert(children, line("不用在这里等。任务需要你回复或本轮结束时，这条会回到「需要我」。"))
+		table.insert(children, line("不用在这里等。任务需要你回复或本轮结束时，这条会回到「待处理」。"))
 		table.insert(children, line({ t("要补充要求，到任务页里说。这里的内容到不了正在运行的任务。", "muted") }))
 		buttons(primary_button(item, "quiet"))
 	end
