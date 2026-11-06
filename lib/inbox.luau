@@ -1740,13 +1740,14 @@ local TAB_SEGMENTS = 3
 
 -- The workbench tab's name. Tern caps a tab name at 220px (about 17 CJK characters),
 -- so the total leads and each kind is a two-character word with its count:
--- `飞书 7 · 等你1 执行5 分析1`. A P0 item counts only as 紧急, so the kinds add up to
--- the total; at most three show, the rest go to `+N`.
+-- `飞书 7｜等你1·执行5·分析1`. `｜` splits the total from its breakdown, `·` splits kinds.
+-- A P0 item counts only as 紧急, so the kinds add up to the total; at most three show,
+-- the rest go to `+N`.
 local function tab_name(state: any): string
 	if state.problem and #state.items == 0 then
-		return "飞书 · ⚠ 加载失败"
+		return "飞书｜⚠ 加载失败"
 	elseif state.loading and #state.items == 0 then
-		return "飞书 · 加载中…"
+		return "飞书｜加载中…"
 	end
 	local counts = { task = 0, urgent = 0, reply = 0, deep = 0, other = 0 }
 	for _, item in state.items do
@@ -1780,7 +1781,7 @@ local function tab_name(state: any): string
 	if rest > 0 then
 		table.insert(segments, "+" .. tostring(rest))
 	end
-	local name = if total > 0 then "飞书 " .. tostring(total) .. " · " .. table.concat(segments, " ") else "飞书 · 已清空"
+	local name = if total > 0 then "飞书 " .. tostring(total) .. "｜" .. table.concat(segments, "·") else "飞书｜已清空"
 	return if state.problem then name .. " ⚠" else name
 end
 
