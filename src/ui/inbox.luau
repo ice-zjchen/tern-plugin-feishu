@@ -5,6 +5,7 @@ local queue = require("./queue")
 local detail = require("./detail")
 local thread = require("./thread")
 local settings = require("./settings")
+local history = require("./history")
 local ui, t, line = p.ui, p.t, p.line
 
 local inbox = {}
@@ -18,6 +19,12 @@ function inbox.render(model: any, facts: any, cx: any): any
 		return {
 			main = ui.node("col", { role = "fl.root", gap = "none" }, { layout.header(model, facts), settings.render(model) }),
 			dock = layout.dock(model, facts, cx.cols < WIDE_MEDIUM),
+		}
+	end
+	if model.page == "history" then
+		return {
+			main = ui.node("col", { role = "fl.root", gap = "none" }, { layout.header(model, facts), history.body(model) }),
+			dock = history.dock(model),
 		}
 	end
 	local wide = cx.cols >= WIDE_COLS

@@ -4,6 +4,8 @@
 -- independent parts: what AI made of it (`analysis`), what you did with it
 -- (`disposition`), and the task tab working on it (`task`).
 
+local history = require("./history")
+
 export type Pri = "P0" | "P1" | "P2" | "P3"
 export type Kind = "fyi" | "reply" | "deep"
 
@@ -139,6 +141,7 @@ export type Model = {
 	source: string,
 	person: string?,
 	selected: string?,
+	history: history.State?,
 	page: string?,
 	mode: string?,
 	command: string,

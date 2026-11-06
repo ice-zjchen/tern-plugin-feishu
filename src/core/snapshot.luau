@@ -321,7 +321,7 @@ function snapshot.decode(value: any, cfg: Config): Model?
 	model.person = optional_string(stored.person, "person")
 	model.selected = optional_string(stored.selected, "selected")
 	if stored.page ~= nil then
-		model.page = choice(stored.page, "page", { "settings" })
+		model.page = choice(stored.page, "page", { "settings", "history" })
 	end
 	if stored.mode ~= nil then
 		model.mode = choice(stored.mode, "mode", { "draft", "command", "setting" })

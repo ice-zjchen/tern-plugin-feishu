@@ -17,7 +17,7 @@ tern.command({
 	id = "open",
 	title = "飞书 Feishu / Lark：查看 @我的消息",
 	run = function(cx)
-		if not cx:new_block("tern-plugin-feishu.mentions", {}, "tab") then
+		if not cx:new_block("tern-plugin-feishu.inbox", { "history" }, "tab") then
 			cx:toast("error", "飞书插件未就绪", "请确认当前主机已安装 tern-plugin-feishu 插件。")
 		end
 	end,

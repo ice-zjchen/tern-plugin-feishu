@@ -10,12 +10,14 @@ local views = require("./views")
 local text = require("../shared/text")
 local markup = require("../shared/markup")
 local schema = require("../shared/schema")
+local history = require("./history")
 
 type Model = types.Model
 type Matter = types.Matter
 export type Effect = { type: string, [string]: any }
 export type Event = { type: string, [string]: any }
 local update = {}
+local PUMP_ACTIONS = { view = true, source = true, force = true, retry = true, redraft = true, ["rule-del"] = true, ["rule-mode"] = true }
 
 local function emit(out: { Effect }, effect: any)
 	table.insert(out, effect)
@@ -262,6 +264,8 @@ local function action(model: Model, event: Event, out: { Effect })
 	local m = current(model)
 	if name == "view" then
 		if not views.known(value) then return end
+		model.page = nil
+		if model.mode then focus(model, nil, out) end
 		model.view, model.person, model.selected = value, nil, nil
 		model.command, model.command_cursor, model.flash = "", 0, nil
 		reselect(model, 1)
@@ -463,9 +467,21 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 	local out: { Effect } = {}
 	local m = if type(event.id) == "string" then matter.find(model, event.id) else nil
 	local ty = event.type
+	if ty == "history" or (ty == "action" and event.name == "history") then
+		local h = model.history or history.empty()
+		model.history = h
+		if ty == "action" then
+			model.page = "history"
+			focus(model, nil, out)
+			event = { type = "history", name = "open" }
+		end
+		for _, effect in history.apply(h, event) do emit(out, effect) end
+		emit(out, { type = "save" })
+		return out, true
+	end
 	if ty == "select" or ty == "move" or ty == "read-status" or ty == "setting" then
 		model.queue_enabled = true
-	elseif ty == "action" and table.find({ "view", "source", "force", "retry", "redraft", "rule-del", "rule-mode" }, event.name) then
+	elseif ty == "action" and PUMP_ACTIONS[event.name] then
 		model.queue_enabled = true
 	elseif ty == "init" and not model.loaded then model.queue_enabled = true end
 	if ty == "init" then
@@ -475,6 +491,11 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			local selected = current(model)
 			if selected then show_images(model, selected, out) end
 		else refresh(model, false, out) end
+		if model.page == "history" then
+			local h = model.history or history.empty()
+			model.history = h
+			for _, effect in history.apply(h, { name = "open" }) do emit(out, effect) end
+		end
 	elseif ty == "action" then action(model, event, out)
 	elseif ty == "select" then
 		if m then select_item(model, m.id, out); if event.open then open_message(model, m, out) end end

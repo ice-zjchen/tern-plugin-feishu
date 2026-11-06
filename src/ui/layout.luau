@@ -1,5 +1,6 @@
 local p = require("./primitives")
 local status = require("../core/status")
+local keymap = require("../shared/keymap")
 local ui, t, line = p.ui, p.t, p.line
 
 local layout = {}
@@ -8,13 +9,14 @@ local function nav_strip(model: any, facts: any): any
 	local tabs = {}
 	for _, def in facts.views do
 		if def.id == "pending" or def.id == "doing" or def.id == "later" or def.id == "done" then
-			local current = model.page ~= "settings" and not model.person and model.view == def.id
+			local current = model.page == nil and not model.person and model.view == def.id
 			table.insert(tabs, ui.button(def.label .. " " .. tostring(def.count), {
 				key = def.id, role = if current then "fl.nav.current" else "fl.nav", variant = "quiet", on = current,
 				actions = { click = "view=" .. def.id },
 			}))
 		end
 	end
+	table.insert(tabs, ui.button("@我历史", { key = "history", variant = "quiet", on = model.page == "history", actions = { click = "history" } }))
 	return ui.node("row", { key = "tabs", role = "fl.tabs", gap = "none", wrap = true }, tabs)
 end
 
@@ -27,7 +29,7 @@ function layout.header(model: any, facts: any): any
 			ui.node("row", { key = "actions", role = "fl.header.actions", gap = "sm", wrap = true }, {
 				line({ t(activity, if facts.running > 0 then "info" else "muted") }),
 				ui.button(if model.loading then "刷新中…" else "刷新", {
-					key = "refresh", size = "sm", actions = { click = "refresh" }, busy = model.loading, disabled = model.loading,
+					key = "refresh", size = "sm", actions = { click = if model.page == "history" then "history-refresh" else "refresh" }, busy = model.loading, disabled = model.loading,
 				}),
 				ui.button(if model.page == "settings" then "返回工作台" else "设置", {
 					key = "settings", size = "sm", actions = { click = "settings" },
@@ -44,14 +46,11 @@ function layout.header(model: any, facts: any): any
 	return ui.node("col", { key = "head", gap = "none" }, lines)
 end
 
-local KEYS = { "j/k 上下", "a 下一步", "o 手动开任务", "6 @我", "7 私聊" }
-local ADJUST_KEYS = { "j/k 上下", "a 下一步", "e 修改", "/ 让 AI 调整", "o 手动开任务", "6 @我", "7 私聊" }
-local SETTINGS_KEYS = { "j/k 上下", "空格 切换", "←/→ 换值", "Esc 返回" }
 
 function layout.dock(model: any, facts: any, narrow: boolean): any
 	local hints = {}
 	local adjustable = facts.item ~= nil and status.can_adjust(facts.item)
-	for _, hint in (if model.page == "settings" then SETTINGS_KEYS elseif narrow then { "j/k 上下", "a 下一步" } elseif adjustable then ADJUST_KEYS else KEYS) do
+	for _, hint in keymap.hints(model.page, adjustable, narrow) do
 		local k, label = string.match(hint, "^(%S+) (.+)$")
 		table.insert(hints, t(k :: string, "strong"))
 		table.insert(hints, t(" " .. (label :: string) .. "   ", "muted"))

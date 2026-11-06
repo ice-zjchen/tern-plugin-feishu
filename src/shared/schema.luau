@@ -27,8 +27,8 @@ schema.FIELDS = ({
 	{ id = "agent_images", group = "agent", kind = "switch", default = true, label = "把图片发给 AI", hint = "触发消息里的图片，最多 3 张" },
 
 	{ id = "thinking", group = "environment", kind = "choice", default = "default", choices = { "default", "off", "low", "medium", "high" }, label = "思考强度" },
-	{ id = "model_analysis", group = "environment", kind = "text", default = "", label = "初判模型", hint = "如 opus 或 @smol；留空用 omp 默认模型" },
-	{ id = "model_chat", group = "environment", kind = "text", default = "", label = "对话模型", hint = "/ 对话用；留空用 omp 默认模型" },
+	{ id = "model_analysis", group = "environment", kind = "text", default = "", label = "初判模型", hint = "如 opus 或 @smol；留空用默认模型" },
+	{ id = "model_chat", group = "environment", kind = "text", default = "", label = "对话模型", hint = "/ 对话用；留空用默认模型" },
 	{ id = "model_relevance", group = "environment", kind = "text", default = "", label = "关联判断模型", hint = "开始任务前判断强弱关联；简单二选一，可填 @smol" },
 	{ id = "workspace", group = "environment", kind = "text", default = "", label = "Workspace 目录", hint = "AI 分析和任务的启动目录，支持绝对路径或 ~/；留空或不存在时用插件数据目录" },
 	{ id = "skills_dir", group = "environment", kind = "text", default = "", label = "Skills 目录", hint = "额外技能目录，相对 Workspace；留空用默认发现规则" },

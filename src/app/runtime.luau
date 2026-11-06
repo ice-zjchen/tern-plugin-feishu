@@ -125,6 +125,10 @@ execute = function(rt, effect)
 			event.decisions = store.decisions()
 			dispatch(rt, event)
 		end)
+	elseif ty == "history-search" then
+		lark.search({ filters = { "--is-at-me" }, token = effect.token }, function(page, err)
+			dispatch(rt, { type = "history", name = "result", gen = effect.gen, page = page, error = err })
+		end)
 	elseif ty == "read-status" then
 		if #effect.ids == 0 then dispatch(rt, { type = "read-status", gen = effect.gen, found = {}, added = effect.added }); return end
 		lark.read_status(effect.ids, function(found, err)
@@ -192,6 +196,7 @@ local function failed_effect(rt, effect, err)
 	if event_type then
 		dispatch(rt, { type = event_type, id = effect.id, gen = effect.gen, latest = effect.latest, error = tostring(err), found = {}, added = effect.added })
 	elseif ty == "image" then dispatch(rt, { type = "image", key = effect.key, error = tostring(err) })
+	elseif ty == "history-search" then dispatch(rt, { type = "history", name = "result", gen = effect.gen, error = tostring(err) })
 	else error(err, 0) end
 end
 

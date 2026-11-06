@@ -11,8 +11,3 @@ styles = ["inbox.css"]
 id = "inbox"
 title = "飞书工作台"
 icon = "inbox"
-
-[[blocks]]
-id = "mentions"
-title = "飞书 @我的消息"
-icon = "message"

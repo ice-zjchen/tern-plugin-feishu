@@ -5,7 +5,9 @@ local runtime = require("./runtime")
 tern.block.define("inbox", {
 	font = "sans",
 	init = function(cx, _args, saved)
-		return runtime.attach(cx, saved)
+		local rt = runtime.attach(cx, saved)
+		if _args[1] == "history" then runtime.event(rt, { ev = "action", act = "history" }, cx) end
+		return rt
 	end,
 	view = runtime.render,
 	title = runtime.title,

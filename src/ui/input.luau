@@ -3,6 +3,7 @@
 local ids = require("./ids")
 local schema = require("../shared/schema")
 local views = require("../core/views")
+local keymap = require("../shared/keymap")
 
 local input = {}
 
@@ -11,8 +12,11 @@ function input.event(model: any, ev: any): any
 		return if ev.ev == "action" and ev.act == "close-thread" then { type = "action", name = "close-thread" } else nil
 	end
 	if ev.ev == "action" and type(ev.act) == "string" then
+		local name = string.match(ev.act, "^history%-(.+)$")
+		if name then return { type = "history", name = name } end
 		return { type = "action", name = ev.act, value = ev.value }
 	elseif (ev.ev == "select" or ev.ev == "activate") and type(ev.item) == "string" then
+		if model.page == "history" then return { type = "history", name = "select", index = tonumber(ev.item), open = ev.ev == "activate" } end
 		if string.sub(ev.item, 1, #ids.QUEUE_PREFIX) ~= ids.QUEUE_PREFIX then return nil end
 		return { type = "select", id = string.sub(ev.item, #ids.QUEUE_PREFIX + 1), open = ev.ev == "activate" }
 	elseif ev.ev == "change" and type(ev.id) == "string" then
@@ -27,11 +31,6 @@ function input.event(model: any, ev: any): any
 	return nil
 end
 
-local ACTIONS = {
-	a = "primary", e = "edit", r = "redraft", c = "copy", s = "snooze", x = "archive", u = "undo",
-	R = "refresh", f5 = "refresh", m = "load-more", ["*"] = "star", enter = "open", [","] = "settings",
-	o = "open-task", g = "force", i = "hide-chat", n = "manual-chat",
-}
 
 function input.key(model: any, key: any): any
 	if model.dialog then return if key.name == "escape" then { type = "action", name = "close-thread" } else nil end
@@ -47,6 +46,18 @@ function input.key(model: any, key: any): any
 		elseif key.name == "left" or k == "h" then return { type = "settings-activate", direction = -1 } end
 		return nil
 	end
+	if model.page == "history" then
+		if k == "j" or key.name == "down" then return { type = "history", name = "move", direction = 1 }
+		elseif k == "k" or key.name == "up" then return { type = "history", name = "move", direction = -1 }
+		elseif k == "r" or k == "R" or key.name == "f5" then return { type = "history", name = "refresh" }
+		elseif k == "n" or key.name == "right" then return { type = "history", name = "next" }
+		elseif k == "p" or key.name == "left" then return { type = "history", name = "previous" }
+		elseif k == "c" then return { type = "history", name = "copy-message" }
+		elseif key.name == "enter" then return { type = "history", name = "open-message" }
+		elseif k == "," then return { type = "action", name = "settings" }
+		elseif string.match(k, "^[1-5]$") then return { type = "action", name = "view", value = views.LIST[tonumber(k) :: number].id } end
+		return nil
+	end
 	if key.name == "down" or k == "j" then return { type = "move", direction = 1 }
 	elseif key.name == "up" or k == "k" then return { type = "move", direction = -1 }
 	elseif k == "/" then return { type = "focus", mode = "command" }
@@ -54,9 +65,9 @@ function input.key(model: any, key: any): any
 		local source = if k == "6" then "mention" else "dm"
 		return { type = "action", name = "source", value = if model.source == source then "all" else source }
 	elseif string.match(k, "^[1-5]$") then
-		return { type = "action", name = "view", value = views.LIST[tonumber(k)].id }
+		return { type = "action", name = "view", value = views.LIST[tonumber(k) :: number].id }
 	end
-	local action = ACTIONS[k] or ACTIONS[key.name]
+	local action = keymap.action(k) or keymap.action(key.name)
 	return if action then { type = "action", name = action } else nil
 end
 
