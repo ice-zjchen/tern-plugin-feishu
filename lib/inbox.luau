@@ -375,7 +375,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 				table.insert(thread, {
 					id = message.message_id,
 					sender = if mine then "我" elseif type(from) == "table" then tostring(from.name or from.id or "?") else "?",
-					time = string.sub(tostring(message.create_time or ""), -5),
+					time = tostring(message.create_time or ""),
 					content = tostring(message.content or ""),
 					deleted = message.deleted == true,
 					mine = mine,
@@ -384,7 +384,7 @@ local function load_thread(state: any, item: any, done: () -> ())
 			end
 		end
 		if not seen then
-			table.insert(thread, { id = item.latest_id or item.id, sender = item.name, time = string.sub(item.time, -5), content = item.content, deleted = item.deleted })
+			table.insert(thread, { id = item.latest_id or item.id, sender = item.name, time = item.time, content = item.content, deleted = item.deleted })
 		end
 		item.thread = thread
 		item.thread_for_agent = {}
@@ -624,10 +624,12 @@ end
 -- said, so the matter comes back to you and goes round again.
 local function absorb(state: any, head: any, item: any)
 	table.insert(head.folded, item.id)
-	if item.time >= head.time then
-		head.latest_id, head.content, head.time, head.link, head.deleted = item.id, item.content, item.time, item.link, item.deleted
-		head.thread, head.thread_for_agent, head.thread_error = nil, nil, nil
+	if item.time < head.time then
+		-- Found by looking further back: nothing new has happened in this matter.
+		return
 	end
+	head.latest_id, head.content, head.time, head.link, head.deleted = item.id, item.content, item.time, item.link, item.deleted
+	head.thread, head.thread_for_agent, head.thread_error = nil, nil, nil
 	if item.triage then
 		return
 	end
@@ -911,81 +913,156 @@ local function schedule_tasks(state: any)
 	end)
 end
 
+-- Where each source's next page starts. A source you have paged through keeps its
+-- place across refreshes, which only ever read the newest page; one you haven't
+-- follows the newest page's cursor.
+local function note_cursor(state: any, key: string, data: any, since: number, previous: any, more: boolean)
+	local token = data.page_token
+	local has_next = data.has_more == true and type(token) == "string" and token ~= ""
+		and not (previous and previous.token == token)
+	if more then
+		state.cursors[key] = if has_next then { token = token, since = since, paged = true } else { exhausted = true }
+	elseif not (previous and (previous.paged or previous.exhausted)) then
+		state.cursors[key] = if has_next then { token = token, since = since } else nil
+	end
+end
+
+-- Searches each source: the newest page, or with `more`, the next page of those that
+-- have one. Lookback is part of the key, since a cursor belongs to its search.
+local function search_sources(state: any, more: boolean, after: () -> ())
+	local sources = {}
+	local function add(filters: { string }, mention: boolean)
+		local key = table.concat(filters, " ") .. "|" .. tostring(settings.get("lookback_days"))
+		local cursor = state.cursors[key]
+		if not more or (cursor and cursor.token) then
+			table.insert(sources, { filters = filters, mention = mention, key = key })
+		end
+	end
+	if settings.get("source_mention") or not settings.get("hide_atall") then
+		add({ "--is-at-me" }, true)
+	end
+	if settings.get("source_dm") then
+		add({ "--chat-type", "p2p" }, false)
+	end
+	local star_ids = {}
+	for _, star in stars() do
+		table.insert(star_ids, star.id)
+	end
+	if #star_ids > 0 and settings.get("source_star") then
+		add({ "--sender", table.concat(star_ids, ",") }, false)
+	end
+	if #sources == 0 then
+		after()
+		return
+	end
+	local results, waiting, problem = {}, #sources, nil
+	for _, source in sources do
+		local previous = state.cursors[source.key]
+		local since = if more then previous.since else os.time() - settings.get("lookback_days") * 86400
+		feishu.search(source.filters, settings.get("lookback_days"), function(data, err)
+			waiting -= 1
+			if err then
+				problem = err
+				if more then
+					-- A cursor that fails won't work later; the next refresh starts over.
+					state.cursors[source.key] = nil
+				end
+			else
+				table.insert(results, { messages = data.messages, mention = source.mention })
+				note_cursor(state, source.key, data, since, previous, more)
+			end
+			if waiting == 0 and alive(state) then
+				local function finish()
+					state.problem = problem
+					merge(state, results)
+					after()
+				end
+				if not settings.get("hide_muted") then
+					finish()
+					return
+				end
+				local ids, seen = {}, {}
+				local function add_chat(chat_id: string, chat_type: string)
+					if chat_type ~= "p2p" and chat_id ~= "" and not seen[chat_id] then
+						seen[chat_id] = true
+						table.insert(ids, chat_id)
+					end
+				end
+				for _, item in state.items do
+					add_chat(item.chat_id, item.chat_type)
+				end
+				for _, result in results do
+					for _, message in result.messages do
+						add_chat(tostring(message.chat_id or ""), tostring(message.chat_type or "group"))
+					end
+				end
+				feishu.chat_settings(ids, function(prefs, pref_err)
+					if not alive(state) then
+						return
+					end
+					state.chat_settings = prefs
+					if pref_err then
+						problem = if problem then problem .. "\n" .. pref_err else pref_err
+					end
+					finish()
+				end)
+			end
+		end, if more then { token = previous.token, since = since } else { since = since })
+	end
+end
+
+-- Whether any enabled source has an older page left to read.
+local function has_more(state: any): boolean
+	local suffix = "|" .. tostring(settings.get("lookback_days"))
+	for key, cursor in state.cursors do
+		if cursor.token and string.sub(key, -#suffix) == suffix then
+			return true
+		end
+	end
+	return false
+end
+
+-- Reads the next page of each source into the queue. Older messages wait to be
+-- selected before omp reads them, so looking further back never starts a burst of work.
+local function load_more(state: any)
+	if state.loading or not state.me or not has_more(state) then
+		return
+	end
+	local before = {}
+	for _, item in state.items do
+		before[item.id] = true
+	end
+	state.loading, state.loading_more, state.problem = true, true, nil
+	render(state)
+	search_sources(state, true, function()
+		local added = 0
+		for _, item in state.items do
+			if not before[item.id] then
+				added += if item.triage or item.hidden then 0 else 1
+				item.backlog = true
+			end
+		end
+		sync_read(state, function()
+			state.loading, state.loading_more = false, false
+			-- A failure already shows in the notice at the top, until the next refresh clears it.
+			state.flash = if state.problem then nil
+				elseif added > 0 then "又加载了 " .. tostring(added) .. " 条待处理消息，选中后才会分析"
+				elseif has_more(state) then "这一页没有新的待处理消息，可以继续加载"
+				else "这段时间内的消息都已加载"
+			reselect(state, nil)
+			sync_tasks(state)
+			pump(state)
+			render(state)
+		end)
+	end)
+end
+
 local function refresh(state: any)
 	if state.loading or not alive(state) then
 		return
 	end
 	state.loading, state.problem = true, nil
 	state.last_refresh = os.time()
-
-	local function search_all(after: () -> ())
-		local sources = {}
-		if settings.get("source_mention") or not settings.get("hide_atall") then
-			table.insert(sources, { filters = { "--is-at-me" }, mention = true })
-		end
-		if settings.get("source_dm") then
-			table.insert(sources, { filters = { "--chat-type", "p2p" } })
-		end
-		local star_ids = {}
-		for _, star in stars() do
-			table.insert(star_ids, star.id)
-		end
-		if #star_ids > 0 and settings.get("source_star") then
-			table.insert(sources, { filters = { "--sender", table.concat(star_ids, ",") } })
-		end
-		if #sources == 0 then
-			after()
-			return
-		end
-		local results, waiting, problem, truncated = {}, #sources, nil, false
-		for _, source in sources do
-			feishu.search(source.filters, settings.get("lookback_days"), function(data, err)
-				waiting -= 1
-				if err then
-					problem = err
-				else
-					truncated = truncated or data.has_more == true
-					table.insert(results, { messages = data.messages, mention = source.mention == true })
-				end
-				if waiting == 0 and alive(state) then
-					local function finish()
-						state.problem, state.truncated = problem, truncated
-						merge(state, results)
-						after()
-					end
-					if not settings.get("hide_muted") then
-						finish()
-						return
-					end
-					local ids, seen = {}, {}
-					local function add(chat_id: string, chat_type: string)
-						if chat_type ~= "p2p" and chat_id ~= "" and not seen[chat_id] then
-							seen[chat_id] = true
-							table.insert(ids, chat_id)
-						end
-					end
-					for _, item in state.items do
-						add(item.chat_id, item.chat_type)
-					end
-					for _, result in results do
-						for _, message in result.messages do
-							add(tostring(message.chat_id or ""), tostring(message.chat_type or "group"))
-						end
-					end
-					feishu.chat_settings(ids, function(prefs, pref_err)
-						if not alive(state) then
-							return
-						end
-						state.chat_settings = prefs
-						if pref_err then
-							problem = if problem then problem .. "\n" .. pref_err else pref_err
-						end
-						finish()
-					end)
-				end
-			end)
-		end
-	end
 
 	feishu.whoami(function(me, err)
 		if not alive(state) then
@@ -998,7 +1075,7 @@ local function refresh(state: any)
 		end
 		state.me = me
 		local function after_agenda()
-			search_all(function()
+			search_sources(state, false, function()
 				-- Before the backlog line is drawn, so unread messages get analyzed first.
 				sync_read(state, function()
 					state.loading = false
@@ -1460,6 +1537,7 @@ local function facts_of(state: any): any
 		table.insert(facts.people, { id = star.id, name = star.name, count = n })
 	end
 	facts.queue = visible(state)
+	facts.has_more = has_more(state)
 	facts.item = current(state)
 	facts.dialog_item = state.dialog and by_id(state, state.dialog.id)
 	facts.draft = if facts.item then field_text(facts.item) else ""
@@ -1473,6 +1551,8 @@ local function act(state: any, name: string, value: string?, cx: any)
 		set_view(state, value, nil)
 	elseif name == "source" then
 		set_source(state, value)
+	elseif name == "load-more" then
+		load_more(state)
 	elseif name == "settings" then
 		if state.mode then set_focus(state, nil) end
 		state.page = if state.page == "settings" then nil else "settings"
@@ -1661,6 +1741,7 @@ tern.block.define("inbox", {
 			images = {},
 			settings_cursor = settings.FIELDS[1].id,
 			field_cursor = 0,
+			cursors = {},
 		}
 		running[cx.pane] = state
 		if cache.restore(state) then
@@ -1787,6 +1868,8 @@ tern.block.define("inbox", {
 			undo(state)
 		elseif k == "R" or key.name == "f5" then
 			refresh(state)
+		elseif k == "m" then
+			load_more(state)
 		elseif k == "/" then
 			local item = current(state)
 			if item and view.can_adjust(item) then

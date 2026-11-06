@@ -29,7 +29,7 @@
 		.sf-item { height: var(--sf-row); align-items: flex-start; padding: 10px 16px; border-radius: 0; border: 0; border-bottom: 1px solid var(--l1); cursor: pointer; min-width: 0; font-size: 14px; }
 		.sf-item > * { white-space: pre; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 21px; }
 		.sf-item-label { flex: 1 1 auto; }
-		.sf-item-value { flex: 0 0 auto; text-align: right; font-size: 12px; }
+		.sf-item-value { flex: 0 0 auto; max-width: none; text-align: right; font-size: 12px; }
 		.sf-item.sel { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }
 	}
 	[data-role='fl.queue.foot'] { flex: 0 0 auto; padding: 10px 16px; border-top: 1px solid var(--fl-line); font-size: 12px; }

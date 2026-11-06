@@ -13,7 +13,7 @@ local ITEM_FIELDS = {
 }
 local STATE_FIELDS = {
 	"me", "view", "person", "selected", "spent", "log", "agenda", "agenda_error",
-	"chat_settings", "truncated", "backlog_marked", "last_refresh", "undo", "command",
+	"chat_settings", "cursors", "backlog_marked", "last_refresh", "undo", "command",
 	"problem", "runtime_warning", "source",
 }
 
@@ -63,6 +63,13 @@ function cache.restore(state: any): boolean
 	state.image_paths = snapshot.image_paths or {}
 	state.has_snapshot = true
 	for _, item in state.items do
+		-- Older snapshots kept only HH:MM; reload context rather than invent its date.
+		for _, message in item.thread or {} do
+			if string.match(tostring(message.time), "^%d%d:%d%d$") then
+				item.thread, item.thread_for_agent = nil, nil
+				break
+			end
+		end
 		if item.agent == "running" then
 			-- Never replay an interrupted turn: it may already have used tools.
 			item.agent = "failed"

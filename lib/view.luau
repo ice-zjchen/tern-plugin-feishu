@@ -3,6 +3,7 @@
 local tern = require("tern")
 local feishu = require("./feishu")
 local settings = require("./settings")
+local time = require("./time")
 local ui = tern.ui
 
 local view = {}
@@ -142,6 +143,7 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 	local items = {}
 	for _, item in facts.queue do
 		local status = view.STATUS[view.status(item)]
+		local timestamp, full_time = time.format(item.time)
 		local summary = if item.analysis and not item.analysis.manual and item.analysis.summary ~= "" then item.analysis.summary else feishu.clean(item.content)
 		if (item.task_new or 0) > 0 then
 			status = { "omp 中有新消息", "warning" }
@@ -162,8 +164,9 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 		table.insert(items, ui.node("item", {
 			key = item.id,
 			role = "fl.queue.message",
+			title = full_time,
 			label = label,
-			value = { t(string.sub(item.time, -5), "muted"), "\n", t(status[1], status[2]) },
+			value = { t(timestamp, "muted"), "\n", t(status[1], status[2]) },
 		}))
 	end
 	local children: { any } = {
@@ -176,6 +179,15 @@ local function queue_block(state: any, facts: any, list_cells: number): any
 			grow = 1,
 		}, items),
 	}
+	if facts.has_more then
+		table.insert(children, ui.node("row", { key = "more", role = "fl.queue.foot", justify = "between", gap = "sm" }, {
+			line({ t("还有更早的消息", "muted") }),
+			ui.button(if state.loading_more then "加载中…" else "加载更早", {
+				key = "load", size = "sm", variant = "quiet", keys = { "m" },
+				actions = { click = "load-more" }, busy = state.loading_more == true, disabled = state.loading == true,
+			}),
+		}))
+	end
 	local foot = queue_foot(state, facts)
 	if foot then
 		table.insert(children, foot)
@@ -206,10 +218,11 @@ local function thread_of(item: any): { any }
 end
 
 local function message_node(state: any, key: string, message: any, hit: boolean): any
+	local timestamp, full_time = time.format(tostring(message.time))
 	return ui.node("col", { key = key, role = if hit then "fl.msg.hit" else "fl.msg", gap = "xs" }, {
 		ui.node("row", { justify = "between", gap = "sm", wrap = true }, {
 			line({ t(message.sender, "strong") }),
-			line({ t(string.sub(tostring(message.time), -5), "muted") }),
+			line({ t(timestamp, "muted") }, { title = full_time }),
 		}),
 		line(if message.deleted then { t("[消息已撤回]", "muted") } else feishu.clean(tostring(message.content)), { role = "fl.msg.text" }),
 		images_of(state, message),
@@ -371,7 +384,8 @@ local function analysis_block(state: any, item: any): any
 	local a = item.analysis
 	local status = view.status(item)
 	local where = if item.chat_type == "p2p" then "私聊" else item.chat
-	local byline = (if a and not a.manual then a.pri .. " · " else "") .. item.name .. " · " .. where .. " · " .. string.sub(item.time, -5)
+	local timestamp, full_time = time.format(item.time)
+	local byline = (if a and not a.manual then a.pri .. " · " else "") .. item.name .. " · " .. where .. " · " .. timestamp
 	if item.sender_type ~= "user" then
 		byline ..= " · " .. (if item.sender_type == "bot" then "机器人" else "身份未知")
 	end
@@ -389,7 +403,7 @@ local function analysis_block(state: any, item: any): any
 	local children: { any } = {
 		line({ t(title, "strong") }, { key = "title", role = "fl.summary.title" }),
 		ui.node("row", { key = "top", justify = "between", gap = "md", wrap = true }, {
-			line({ t(byline, "muted") }, { key = "meta", role = "fl.summary.meta" }),
+			line({ t(byline, "muted") }, { key = "meta", role = "fl.summary.meta", title = full_time }),
 			ui.node("row", { key = "tools", gap = "xs" }, tools),
 		}),
 	}
@@ -637,8 +651,6 @@ local function header(state: any, facts: any): any
 	end
 	if state.problem then
 		table.insert(lines, line({ t("检索失败 ", "warning strong"), state.problem }, { key = "problem", role = "fl.notice" }))
-	elseif state.truncated then
-		table.insert(lines, line({ t("部分来源超过 50 条，只显示了其中一页。", "muted") }, { key = "problem", role = "fl.notice" }))
 	end
 	return ui.node("col", { key = "head", gap = "none" }, lines)
 end

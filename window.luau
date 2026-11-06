@@ -95,16 +95,14 @@ tern.route.link(function(link, cx)
 		if launch.warning then
 			cx:toast("info", "omp 工作目录已回退", launch.warning)
 		end
-		local attachments = ""
-		for _, directory in runtime.attached_dirs(task.prompt, launch.cwd) do
-			attachments ..= " --add-dir " .. runtime.quote(directory)
-		end
+		local cwd = runtime.task_workspace(task.prompt, launch.cwd)
+		-- A different workspace must discover its own config, skills and rules.
+		local config = if cwd == launch.cwd then " --config " .. runtime.quote(launch.config) else ""
 		-- A normal session in omp's own store, so it outlives the workbench's.
 		local pane = cx.agents:start({
 			prompt = task.prompt,
-			cwd = launch.cwd,
-			command = runtime.quote(program) .. " --cwd " .. runtime.quote(launch.cwd) .. " --allow-home"
-				.. " --config " .. runtime.quote(launch.config) .. attachments,
+			cwd = cwd,
+			command = runtime.quote(program) .. " --cwd " .. runtime.quote(cwd) .. " --allow-home" .. config,
 			how = "tab",
 		})
 		local map = panes()
@@ -113,6 +111,7 @@ tern.route.link(function(link, cx)
 		update(id, { pane = pane, state = "working", began = false, result = false })
 	end)
 	if not ok then
+		update(id, { state = "closed" })
 		cx:toast("error", "无法打开 omp", tostring(err))
 	end
 	return { handled = true }

@@ -1,0 +1,11 @@
+schema = 1
+id = "feishu-native-review"
+name = "飞书界面评审稿"
+version = "0.0.1"
+host = "host.luau"
+window = "window.luau"
+styles = ["surface.css"]
+
+[[blocks]]
+id = "review"
+title = "飞书 · 设计稿"

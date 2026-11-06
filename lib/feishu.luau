@@ -90,14 +90,19 @@ function feishu.whoami(done: (string?, string?) -> ())
 	end
 end
 
--- One page of messages matching `filters` since `days` days ago.
-function feishu.search(filters: { string }, days: number, done: (any, string?) -> ())
+-- One page of messages matching `filters` since `days` days ago. `page` continues an
+-- earlier search: its cursor, and the start time that search used.
+function feishu.search(filters: { string }, days: number, done: (any, string?) -> (), page: { token: string?, since: number }?)
 	local args = {
 		"im", "+messages-search", "--as", "user", "--page-size", "50", "--no-reactions", "--format", "json",
-		"--start", iso(os.time() - days * 86400),
+		"--start", iso(if page then page.since else os.time() - days * 86400),
 	}
 	for _, filter in filters do
 		table.insert(args, filter)
+	end
+	if page and page.token then
+		table.insert(args, "--page-token")
+		table.insert(args, page.token)
 	end
 	run(args, nil, function(data, err)
 		if err then

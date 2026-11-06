@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>飞书工作台 · 事项与下一步</title>
+<style>
+:root{color-scheme:dark light}*{box-sizing:border-box}body{margin:0;font:14px/1.6 system-ui,sans-serif;background:Canvas;color:CanvasText}header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid GrayText}header strong{font-weight:600}nav{display:flex;gap:6px;flex-wrap:wrap}button{font:inherit;padding:5px 10px;cursor:pointer}button[aria-pressed=true]{font-weight:650;outline:1px solid Highlight}small{opacity:.7;margin-left:auto}main{padding:14px}figure{margin:0}img{display:block;width:100%;height:auto}figcaption{padding:12px 4px;opacity:.8}section{max-width:960px;margin:8px auto 32px;padding:0 18px}h2{font-size:18px}table{border-collapse:collapse;width:100%}th,td{padding:10px 12px;border-bottom:1px solid GrayText;text-align:left;vertical-align:top}footer{padding:0 18px 18px;opacity:.75}a{color:LinkText}
+</style>
+</head>
+<body>
+<header><strong>事项与下一步 · 原生评审稿</strong><nav aria-label="查看用户处境">
+<button data-file="prepare-abyss.png" data-note="高风险交办：写明对方要的动作，并说明任务说明不是权限限制。主按钮没有快捷键，避免误按 a 启动。右栏直接显示对话，可以和计划并排核对。" aria-pressed="true">高风险交办</button>
+<button data-file="reply-abyss.png" data-note="回复内容在卡片里。补充框只用来让 omp 改这条回复，不再出现与回复无关的提示。" aria-pressed="false">需要回复</button>
+<button data-file="blocked-abyss.png" data-note="task_waiting 只有状态，没有问题内容，所以不假装知道 omp 问了什么；这里不放输入框，回答到 omp tab 里进行。" aria-pressed="false">omp 等你</button>
+<button data-file="working-abyss.png" data-note="没有实时进度数据，所以不显示“当前在做什么”。写明补充要求要去 omp tab：这里的内容到不了正在运行的任务。" aria-pressed="false">正在处理</button>
+<button data-file="result-abyss.png" data-note="直接展示 omp 本轮的原话，不拆成“已做 / 未做 / 还缺”。回合结束不是完成，核对后再决定继续或归档。" aria-pressed="false">核对结果</button>
+<button data-file="long-thread-abyss.png" data-note="对话超过 4 条时，右栏显示最近 4 条和“较早 3 条”入口；触发消息始终高亮。" aria-pressed="false">长对话</button>
+<button data-file="conversation-modal.png" data-note="modal 只用于右栏放不下的长对话。短对话不需要打开它，也就不会盖住计划。" aria-pressed="false">对话 modal</button>
+<button data-file="focus-1000.png" data-note="1000px 窗口收起第三列，但原话常驻在卡片上方，判断理由可展开。不看原话就不会交办。" aria-pressed="false">1000px 窗口</button>
+<button data-file="conversation-modal-1000.png" data-note="窄窗下从原话下方进入完整对话。关闭或按 Esc 返回，保持原事项和编辑状态。" aria-pressed="false">窄窗 modal</button>
+</nav><small>Tern 实际渲染 · 示例数据</small></header>
+<main><figure><img id="preview" src="tern-native/prepare-abyss.png" alt="高风险交办状态的 Tern 工作台稿"><figcaption id="caption">高风险交办：写明对方要的动作，并说明任务说明不是权限限制。主按钮没有快捷键，避免误按 a 启动。右栏直接显示对话，可以和计划并排核对。</figcaption></figure></main>
+<section><h2>这一版解决的四个问题</h2>
+<table><thead><tr><th>问题</th><th>改法</th></tr></thead><tbody>
+<tr><td>高风险请求可以一键交办</td><td>标题照实写“请你通过”，不改写成“核验”。卡片写明对方要的动作和限制：任务说明不是权限限制。这类事项的主按钮改为“确认，交给 omp”，且没有 <code>a</code> 快捷键。</td></tr>
+<tr><td>核对依据被 modal 盖住</td><td>宽屏右栏直接显示最近 4 条对话并高亮触发消息，只有更长的对话才进 modal。窄屏在卡片上方常驻原话。分析过程不再单独做 modal。</td></tr>
+<tr><td>界面依赖拿不到的数据</td><td>只使用现有字段，见下表。去掉结构化结果、omp 的具体问题、实时进度、查询记录和处理记录。</td></tr>
+<tr><td>补充框含义不清</td><td>从页面底部移进卡片，带发送按钮，并写明发给谁。只在待交办和待回复时出现；omp 等你、处理中、核对结果时不显示，因为它到不了任务 tab。</td></tr>
+</tbody></table>
+<h2>界面内容与数据来源</h2>
+<table><thead><tr><th>界面内容</th><th>来源</th><th>状态</th></tr></thead><tbody>
+<tr><td>标题、判断理由</td><td><code>analysis.summary</code>、<code>analysis.why</code></td><td>已有</td></tr>
+<tr><td>任务说明、回复稿</td><td><code>analysis.task</code>、<code>analysis.draft</code></td><td>已有</td></tr>
+<tr><td>对话与触发消息高亮</td><td><code>item.thread</code>，按消息 id 匹配</td><td>已有</td></tr>
+<tr><td>omp 等你、执行中、本轮结束</td><td><code>item.task_state</code></td><td>已有</td></tr>
+<tr><td>本轮结果原话</td><td><code>item.result</code></td><td>已有</td></tr>
+<tr><td>让 omp 调整</td><td>现有 <code>/</code> 对话，走分析会话</td><td>已有</td></tr>
+<tr><td>对方要的动作</td><td><code>analysis.risk</code>，由分析输出</td><td><strong>需新增</strong></td></tr>
+</tbody></table>
+<p><code>risk</code> 由模型判断，可能漏判。漏判时这条会退回普通交办，因此它只是提醒，不是安全边界。工具权限仍遵循项目配置，本稿没有增加确认前的副作用硬隔离。</p>
+<h2>信息分层</h2>
+<table><thead><tr><th>信息层</th><th>保留什么</th><th>什么不应常驻</th></tr></thead><tbody>
+<tr><td>选择事项</td><td>两行：事项摘要＋时间；发送者／群名＋处理状态。</td><td>独立的第三行状态、重复摘要、无关的 agent 指标。</td></tr>
+<tr><td>做下一步</td><td>当前阶段可执行的操作：交办、回复、去 omp、核对结果。</td><td>无限拉宽的任务输入、同时出现所有阶段的按钮。</td></tr>
+<tr><td>核对依据</td><td>原始对话和判断理由，直接在右栏阅读；有失败时解释具体阻塞。</td><td>工具日志、未查询却看似可信的检查项、泛泛的安全提醒。</td></tr>
+</tbody></table>
+<p>正常执行中的事项不占“需要我”。omp 等你或本轮结束时再回来。</p>
+<h2>聚合按事项，不按人或群</h2>
+<p>同一个人、同一个群可以有多件互不相关的事，不能因为来源相同就合成一条。默认保留独立事项；人和群用于筛选，不改变事项的处理状态。</p>
+<ul>
+<li>同一工单或明确同一话题、同一目标的补充、催办和进展，更新已有事项，不反复新增行。</li>
+<li>同群不同问题、同一人提出不同请求、或目标已经变化的消息，分为不同事项；仅在同一消息线程中也不足以直接合并。</li>
+<li>关系不确定时先保持独立，允许用户合并或拆开。避免模型为了减少行数而误吞掉待办。</li>
+</ul>
+<p>聚合功能尚不存在，所以这一版去掉了队列里的“2 条”。对话区如实标为“触发消息及其上下文”。</p>
+</section>
+<footer>这是交互评审稿，不是生产改动。所有请求、结果与状态均为示例，未连接飞书或 omp。截图在窗口失焦时拍摄，底色比实际偏灰；浅色主题这一版还没有重拍。<a href="tern-native/host.luau">原生稿源文件</a></footer>
+<script>
+for(const button of document.querySelectorAll('nav button'))button.addEventListener('click',()=>{
+ for(const item of document.querySelectorAll('nav button'))item.setAttribute('aria-pressed',String(item===button));
+ document.querySelector('#preview').src='tern-native/'+button.dataset.file;
+ document.querySelector('#preview').alt='Tern 原生工作台设计稿：'+button.textContent;
+ document.querySelector('#caption').textContent=button.dataset.note;
+});
+</script>
+</body>
+</html>

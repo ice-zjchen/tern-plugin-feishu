@@ -89,30 +89,24 @@ function runtime.set_task(id: string, task: any)
 	tern.kv.set("task:" .. id, task)
 end
 
--- Read only the confirmed task's first line, never third-party message context.
--- Paths must match the workspace-owned registry exactly.
-function runtime.attached_dirs(prompt: string, cwd: string): { string }
+-- Only the first line of the user-confirmed task can select a workspace.
+-- The registry belongs to the analysis workspace; message context is never read.
+function runtime.task_workspace(prompt: string, default: string): string
 	local task = string.match(prompt, "\n## 任务\n(.-)\n\n## 飞书消息")
-	local line = task and string.match(task, "^附加仓库：([^\n]+)")
-	if not line then return {} end
-	local ok, registry = pcall(tern.fs.read, cwd .. "/workspaces.md")
-	assert(ok, "无法读取附加仓库清单 workspaces.md")
-	local allowed = {}
-	for directory in string.gmatch(registry, "`(/[^`\n]+)`") do
-		allowed[directory] = true
+	local first = task and string.match(task, "^([^\n]*)") or ""
+	assert(not string.match(first, "^附加仓库："), "旧附加仓库任务需重新确认执行 Workspace")
+	if not string.match(first, "^执行 Workspace：") then return default end
+	local directory = string.match(first, "^执行 Workspace：%s*(.-)%s*$")
+	assert(directory ~= "", "执行 Workspace 不能为空")
+	local ok, registry = pcall(tern.fs.read, default .. "/workspaces.md")
+	assert(ok, "无法读取执行 Workspace 清单 workspaces.md")
+	local allowed = directory == default
+	for candidate in string.gmatch(registry, "|[^\n|]+|%s*`(/[^`\n]+)`%s*|") do
+		if directory == candidate then allowed = true end
 	end
-	local dirs, seen = {}, {}
-	for part in string.gmatch(line, "[^;]+") do
-		local directory = string.match(part, "^%s*(.-)%s*$")
-		assert(allowed[directory], "不在 workspaces.md 中的附加仓库：" .. directory)
-		assert(pcall(tern.fs.list, directory), "附加仓库不存在或不可读：" .. directory)
-		if not seen[directory] then
-			seen[directory] = true
-			table.insert(dirs, directory)
-		end
-	end
-	assert(#dirs <= 2, "最多附加两个仓库")
-	return dirs
+	assert(allowed, "不在 workspaces.md 中的执行 Workspace：" .. directory)
+	assert(pcall(tern.fs.list, directory), "执行 Workspace 不存在或不可读：" .. directory)
+	return directory
 end
 
 -- cx.agents:start accepts a command string, unlike process.run's argv.

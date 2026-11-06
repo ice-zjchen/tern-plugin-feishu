@@ -1,0 +1,46 @@
+/* Review only. Native Tern typography and controls; layout follows attention, not panels. */
+.sf-main[data-surface='plugin.feishu-native-review.review'] {
+	display: flex; flex-direction: column; gap: 0; min-height: 0; padding: 0; overflow: hidden;
+}
+.sf-dock[data-surface='plugin.feishu-native-review.review'] {
+	display: flex; flex-direction: row; align-items: center; justify-content: space-between;
+	flex-wrap: wrap; gap: 12px; padding: 8px 18px; border-top: 1px solid var(--l3);
+	font-size: 12px; max-height: 5em; overflow: auto;
+}
+[data-surface='plugin.feishu-native-review.review'] {
+	[data-role='review.root'] { flex: 1 1 1px; height: 1px; min-height: 0; overflow: hidden; }
+	[data-id='main.bar'] { flex: 0 0 auto; padding: 10px 16px; border-bottom: 1px solid var(--l3); }
+	[data-role='review.body'], [data-role='review.body.stack'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: hidden; }
+	[data-role='review.queue'] { flex: 0 0 340px; min-height: 0; min-width: 0; border-right: 1px solid var(--l3); }
+	[data-role='review.filters'] { flex: 0 0 auto; padding: 14px 16px 12px; }
+	[data-role='review.items'] { flex: 1 1 1px; min-height: 0; }
+	[data-role='review.item'], [data-role='review.item.selected'] { flex: 0 0 auto; padding: 10px 16px; row-gap: 4px; min-width: 0; cursor: pointer; border-bottom: 1px solid var(--l1); }
+	[data-role='review.item']:hover { background: var(--l1); }
+	[data-role='review.item.selected'] { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }
+	[data-role='review.item.title'] { flex: 1 1 1px; min-width: 0; font-size: 14px; line-height: 21px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	[data-role='review.item.sender'] { flex: 1 1 1px; min-width: 0; font-size: 12px; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	[data-role='review.item.reason'], [data-role='review.item.time'] { flex: 0 0 auto; font-size: 12px; line-height: 18px; white-space: nowrap; }
+	[data-role='review.queue.foot'] { flex: 0 0 auto; padding: 10px 16px; border-top: 1px solid var(--l3); font-size: 12px; }
+	[data-role='review.workspace'] { flex: 1 1 1px; min-width: 0; min-height: 0; }
+	[data-role='review.main.scroll'] { flex: 1 1 1px; min-height: 0; min-width: 0; }
+	[data-role='review.reading'] { width: 100%; max-width: 600px; margin: 0 auto; padding: 24px; min-width: 0; row-gap: 16px; }
+	[data-role='review.reading'] > * { flex: 0 0 auto; min-width: 0; }
+	[data-role='review.title'] { font-size: 20px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+	[data-role='review.byline'] { font-size: 12px; margin-top: -8px; }
+	[data-role='review.next'] { margin-top: 4px; }
+	[data-role='review.plan'] { line-height: 1.65; white-space: pre-wrap; }
+	[data-role='review.editor'] { min-height: 5em; }
+	[data-role='review.result'] { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; border-radius: 6px; background: var(--l1); }
+	[data-role='review.risk'] { padding: 10px 12px; border-radius: 6px; background: var(--l1); box-shadow: inset 2px 0 0 var(--warning, var(--accent)); }
+	[data-role='review.adjust'] { min-width: 0; font-size: 13px; }
+	[data-role='review.adjust.field'] { flex: 1 1 1px; min-width: 0; padding: 7px 10px; border: 1px solid var(--l3); border-radius: 6px; }
+	[data-role='review.quote'] { padding: 10px 12px; border-radius: 6px; background: var(--l1); }
+	[data-role='review.context'] { flex: 1.08 1 1px; min-height: 0; min-width: 0; overflow: auto; padding: 24px 20px; border-left: 1px solid var(--l3); }
+	[data-role='review.context'] > * { flex: 0 0 auto; min-width: 0; }
+	[data-role='review.context.text'] { white-space: pre-wrap; line-height: 1.65; }
+	[data-role='review.msg'], [data-role='review.msg.hit'] { flex: 0 0 auto; min-width: 0; padding: 10px 12px; border-radius: 6px; }
+	[data-role='review.msg.hit'] { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }
+	[data-role='review.msg.text'] { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+	[data-role='review.body.stack'] > [data-role='review.queue'] { flex: 1 1 1px; border-right: 0; border-bottom: 1px solid var(--l3); }
+	[data-role='review.body.stack'] > [data-role='review.workspace'] { flex: 2 1 1px; }
+}
