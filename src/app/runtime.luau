@@ -163,12 +163,16 @@ execute = function(rt, effect)
 		ai.prepare_task(effect.matter, effect.task, function(w) notice(rt, w) end, function(prompt, cost, err)
 			dispatch(rt, { type = "prepared", id = effect.id, gen = effect.gen, prompt = prompt, cost = cost, error = err })
 		end)
-	elseif ty == "write-task" then bridge.set_task(effect.id, { prompt = effect.prompt, title = effect.title, state = "starting" })
-	elseif ty == "delete-task" then bridge.set_task(effect.id, nil)
+	elseif ty == "write-task" then bridge.start(effect.id, effect.prompt, effect.title, effect.task_text)
+	elseif ty == "delete-task" then
+		if bridge.request(effect.id) or bridge.state(effect.id) then
+			bridge.remove(effect.id)
+			-- Only the window deletes its result record; host open() routes links.
+			cx:open(bridge.CLEANUP_LINK .. effect.id)
+		end
 	elseif ty == "open-task" then cx:open(bridge.LINK .. effect.id)
 	elseif ty == "reopen-task" then
-		local task = bridge.task(effect.id)
-		if task then task.state = "starting"; bridge.set_task(effect.id, task); cx:open(bridge.LINK .. effect.id)
+		if bridge.restart(effect.id) then cx:open(bridge.LINK .. effect.id)
 		else dispatch(rt, { type = "task-missing", id = effect.id }) end
 	elseif ty == "poll-tasks" then poll_tasks(rt)
 	elseif ty == "spoken" then
@@ -233,6 +237,8 @@ function runtime.attach(cx, saved)
 	end
 	local cfg = config()
 	local model = store.load(cfg) or snapshot.empty(cfg)
+	local ids = {}; for _, m in model.items do table.insert(ids, m.id) end
+	bridge.migrate(ids)
 	if saved and views.known(saved.view) then model.view = saved.view end
 	local rt = { model = model, panes = { [cx.pane] = cx }, timers = {}, events = {}, dispatching = false, closed = false }
 	active = rt

@@ -1,4 +1,4 @@
--- Pure workbench rendering. Layout hooks live in inbox.css; focus stays in runtime.
+-- Pure workbench rendering. Styles live in styles/inbox.css; focus stays in runtime.
 local p = require("./primitives")
 local layout = require("./layout")
 local queue = require("./queue")

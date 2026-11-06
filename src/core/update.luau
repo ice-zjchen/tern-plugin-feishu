@@ -324,7 +324,7 @@ local function action(model: Model, event: Event, out: { Effect })
 			model.flash = "已移回待处理：" .. m.name; reselect(model, nil)
 		elseif not status.settled(m) then resolve(model, m, "snoozed", "稍后处理", out) end
 	elseif name == "redraft" or name == "retry" then
-		if name == "retry" or status.of(m) == "failed" then m.analysis.phase, m.analysis.settle_at = "queued", nil end
+		if m.analysis.phase == "failed" then m.analysis.phase, m.analysis.settle_at = "queued", nil end
 	elseif name == "edit" then start_edit(model, m, out)
 	elseif name == "open" then open_message(model, m, out)
 	elseif name == "star" then
@@ -658,7 +658,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		elseif event.error then model.flash = "执行前分析失败，请重试"; emit(out, { type = "toast", title = model.flash, detail = event.error })
 		else
 			m.task = { phase = "starting", new_messages = 0 }
-			emit(out, { type = "write-task", id = m.id, prompt = event.prompt, title = task_title(m, p.task) })
+			emit(out, { type = "write-task", id = m.id, prompt = event.prompt, title = task_title(m, p.task), task_text = p.task })
 			resolve(model, m, "doing", "已开始任务", out)
 			emit(out, { type = "save-now" })
 			emit(out, { type = "open-task", id = m.id })

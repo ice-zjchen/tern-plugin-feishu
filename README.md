@@ -187,17 +187,19 @@ tern plugin link .
 
 ## 状态与恢复
 
+完整的运行流、代码分层、任务跨端协议和恢复约定见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 每个事项分别保存分析阶段、处理去向和任务页状态；显示状态、下一步按钮和三个视图的计数都从同一套选择器推导。外部调用只返回带请求编号的事件，不直接改队列；迟到的线程、分析、对话和任务准备结果不能覆盖新状态。模型由 host 运行时持有，多工作台面板共享一个模型和持久化写入者。
 
-快照自动从 v1 迁到 v2，保留消息、手改草稿、分析会话、原始对话、任务结果和撤销记录。迁移不启动模型或下载；重载时运行中的分析标为中断，必须手动重试，不自动重放。临时请求、计时器、界面句柄和图片 blob 不入库。损坏或未知版本明确报错，不把旧数据当成空队列覆盖。
+快照自动从 v1 迁到 v2，保留消息、手改草稿、分析会话、原始对话、任务结果和撤销记录。合并消息按 ID 去重，修正旧版私聊刷新不断追加重复引用的问题；不丢弃任何关联消息。迁移不启动模型或下载；重载时运行中的分析标为中断，必须手动重试，不自动重放。临时请求、计时器、界面句柄和图片 blob 不入库。损坏或未知版本明确报错，不把旧数据当成空队列覆盖。
 
 ## 文件
 
 - `plugin.toml`：插件与 block 声明。
-- `window.luau`：命令面板入口、快捷键、路径设置和打开原生 omp 块。
-- `host.luau`：加载 `src/app/host.luau`，只保留工作台一个 block。
+- `host.luau`、`window.luau`：各一行，加载对应的 `src/app/host.luau`、`src/app/window.luau`。
 - `src/core/`：事项类型、状态推导、视图成员与计数、消息合并、事件更新及 v1→v2 快照迁移；不依赖 Tern。
 - `src/app/host.luau`：工作台 block 的薄入口。
+- `src/app/window.luau`：命令面板、路径设置、任务页启动与生命周期处理。
 - `src/app/runtime.luau`：唯一的 host 副作用执行器；进程结果回到事件队列，统一管理刷新、任务同步与等待对话稳定的定时器。
 - `src/app/fetch.luau`：身份、日程、分页检索与群设置的刷新工作流。
 - `src/ui/`：队列、详情、原始对话、设置、布局等渲染模块，以及输入事件与控件 ID；只读模型快照，不读存储或调用服务。
@@ -207,13 +209,13 @@ tern plugin link .
 - `src/shared/template.luau`、`src/services/prompts.luau`：提示词模板的解析、加载和填充。
 - `src/shared/markup.luau`：消息里的图片、@所有人 标记解析。
 - `src/shared/schema.luau`、`src/shared/settings.luau`：设置定义及其存取、旧版设置迁移。
-- `src/shared/bridge.luau`：工作台（host）与任务页（window）之间的任务记录和链接约定。
+- `src/shared/bridge.luau`：host 单独写启动请求，window 单独写任务状态和窗格映射；仅合并同一请求编号的结果，旧 `task:<id>`/`task_panes` 自动迁移后删除。
 - `src/services/lark.luau`：工作台队列、历史页和原始对话共用的 `lark-cli` 调用。
 - `src/services/omp.luau`：无头 omp 调用，按用途（初判、对话、关联判断）选模型。
 - `src/services/launch.luau`：omp 的可执行文件、工作目录、技能配置、PATH，以及任务首行的执行 Workspace 校验。
 - `src/services/store.luau`：版本化工作台快照（合并 0.5 秒内的修改再写入；开始分析、对话或任务前立即写入）、消息处理结果的恢复索引和星标。
 - `src/services/ai.luau`：初判、对话、关联判断的提示词组装与结果解析；`src/core/judgment.luau` 校验结构化结果。
-- `inbox.css`：终端样式，颜色全部取自 Tern 主题变量。
+- `styles/inbox.css`：终端样式，颜色全部取自 Tern 主题变量。
 - `scripts/check.sh`：编译、对不依赖 tern 的模块做严格类型检查、运行 `tests/`，需要 `brew install luau`。
 
 插件 API 参考：[Tern Plugin SDK](https://docs.stencil.so/tern/)。

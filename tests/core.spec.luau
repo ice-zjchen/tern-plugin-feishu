@@ -212,4 +212,39 @@ t.test("restoring a loaded queue and syncing tasks does not replay analysis", fu
 	t.eq(m.analysis.phase, "running")
 end)
 
+t.test("double-clicking retry cannot start the same analysis twice", function()
+	local s = model(); s.cfg.settings.agent_enabled = true
+	local m = add(s, "retry", nil); m.analysis.phase = "failed"
+	action(s, "retry")
+	local first = m.analysis.gen
+	t.eq(m.analysis.phase, "running")
+	local second = action(s, "retry")
+	t.eq(m.analysis.gen, first)
+	t.eq(#effects(second, "analyze"), 0)
+	t.eq(#effects(second, "thread"), 0)
+end)
+
+t.test("repeated private-chat refresh does not duplicate message identities", function()
+	local s = model(); s.me = "me"
+	local first, second = message("old", "2026-11-01 10:00"), message("new", "2026-11-01 10:05")
+	first.chat_type, second.chat_type = "p2p", "p2p"
+	local sources = { { messages = { first, second }, mention = false } }
+	matter.merge(s, sources, {}, {})
+	matter.merge(s, sources, {}, {})
+	matter.merge(s, sources, {}, {})
+	t.eq(#s.items, 1); t.eq(s.items[1].id, "new")
+	t.eq(#status.ids(s.items[1]), 2)
+	t.eq(s.items[1].folded[1], "old")
+end)
+
+t.test("snapshot restoration normalizes repeated references without losing messages", function()
+	local s = model(); local m = add(s, "main", "reply")
+	m.folded = { "first", "first", "main", "second", "first" }
+	local restored = snapshot.decode(snapshot.encode(s), s.cfg)
+	assert(restored)
+	local ids = status.ids(restored.items[1])
+	t.eq(#ids, 3)
+	t.eq(ids[1], "main"); t.eq(ids[2], "first"); t.eq(ids[3], "second")
+end)
+
 t.done()

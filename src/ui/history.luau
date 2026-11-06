@@ -49,7 +49,9 @@ function history_ui.body(model)
 		end
 		if not page.has_more and h.index == #h.pages then table.insert(children, line({ t("已到达全部可检索结果末尾", "muted") })) end
 	elseif not h.loading and not h.error then table.insert(children, line("没有 @我的消息")) end
-	return ui.node("col", { key = "history", role = "fl.history", gap = "sm" }, children)
+	return ui.node("scroll", { key = "history", role = "fl.history" }, {
+		ui.node("col", { gap = "sm" }, children),
+	})
 end
 
 function history_ui.dock(model)

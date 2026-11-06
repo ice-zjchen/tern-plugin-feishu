@@ -5,7 +5,7 @@ version = "0.2.0"
 description = "AI 判断飞书消息怎么处理：回复由你发送，需要深入的确认后开始任务"
 host = "host.luau"
 window = "window.luau"
-styles = ["inbox.css"]
+styles = ["styles/inbox.css"]
 
 [[blocks]]
 id = "inbox"

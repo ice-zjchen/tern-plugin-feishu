@@ -49,6 +49,7 @@ do
 		-- One model for every turn became one per purpose.
 		all.model_analysis = all.model_analysis or all.model
 		all.model_chat = all.model_chat or all.model
+		all.model_relevance = all.model_relevance or all.model
 		all.model, changed = nil, true
 	end
 	if all.source_atall ~= nil then

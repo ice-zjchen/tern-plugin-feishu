@@ -16,6 +16,7 @@
 	[data-role='fl.tabs'] { flex: 1 1 auto; min-width: 0; column-gap: 8px; }
 	[data-role='fl.header.actions'] { flex: 0 1 auto; column-gap: 8px; font-size: 13px; }
 	[data-role='fl.notice'] { padding: 8px 16px; border-bottom: 1px solid var(--fl-line); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5em; overflow: auto; font-size: 13px; }
+	[data-role='fl.history'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 	/* A nonzero basis keeps long content from taking the viewport's height. */
 	[data-role='fl.layout'], [data-role='fl.layout.stack'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: hidden; align-items: stretch; }

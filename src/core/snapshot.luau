@@ -201,8 +201,13 @@ local function read_item(value: any, path: string, legacy: boolean): Matter
 	local phase = choice(if legacy then item.agent else a.phase, path .. ".analysis.phase",
 		{ "queued", "running", "failed", "done" }, if legacy then (if item.analysis then "done" else "queued") else nil)
 	local folded = {}
+	local seen_ids = { [string_value(item.id, path .. ".id")] = true }
 	for i, id in array(item.folded, path .. ".folded") do
-		table.insert(folded, string_value(id, path .. ".folded[" .. tostring(i) .. "]"))
+		local valid = string_value(id, path .. ".folded[" .. tostring(i) .. "]")
+		if not seen_ids[valid] then
+			seen_ids[valid] = true
+			table.insert(folded, valid)
+		end
 	end
 	local talk = {}
 	for i, raw in array(if legacy and item.talk == nil then {} else item.talk, path .. ".talk") do

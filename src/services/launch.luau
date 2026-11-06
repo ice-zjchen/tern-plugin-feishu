@@ -2,6 +2,7 @@
 -- which program, in which workspace, with which runtime config and PATH.
 local tern = require("tern")
 local settings = require("../shared/settings")
+local task = require("../core/task")
 
 local launch = {}
 
@@ -95,20 +96,12 @@ end
 
 -- Only the first line of the user-confirmed task can select a workspace.
 -- The registry belongs to the analysis workspace; message context is never read.
-function launch.task_workspace(prompt: string, default: string): string
-	local task = string.match(prompt, "\n## 任务\n(.-)\n\n## 飞书消息")
-	local first = task and string.match(task, "^([^\n]*)") or ""
-	assert(not string.match(first, "^附加仓库："), "旧附加仓库任务需重新确认执行 Workspace")
-	if not string.match(first, "^执行 Workspace：") then return default end
-	local directory = string.match(first, "^执行 Workspace：%s*(.-)%s*$")
-	assert(directory ~= "", "执行 Workspace 不能为空")
+function launch.task_workspace(task_text: string?, default: string): string
+	local directory = task.workspace(task_text, default)
+	if directory == default then return default end
 	local ok, registry = pcall(tern.fs.read, default .. "/workspaces.md")
 	assert(ok, "无法读取执行 Workspace 清单 workspaces.md")
-	local allowed = directory == default
-	for candidate in string.gmatch(registry, "|[^\n|]+|%s*`(/[^`\n]+)`%s*|") do
-		if directory == candidate then allowed = true end
-	end
-	assert(allowed, "不在 workspaces.md 中的执行 Workspace：" .. directory)
+	assert(task.allowed(directory, default, registry), "不在 workspaces.md 中的执行 Workspace：" .. directory)
 	assert(pcall(tern.fs.list, directory), "执行 Workspace 不存在或不可读：" .. directory)
 	return directory
 end

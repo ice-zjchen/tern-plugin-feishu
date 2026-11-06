@@ -278,8 +278,13 @@ function matter.merge(model: Model, sources: { Source }, decided: { [string]: an
 		if it.chat_type == "p2p" and it.disposition == nil then
 			local older = chats[it.chat_id]
 			if older then
+				local seen_ids = { [it.id] = true }
+				for _, folded_id in it.folded do seen_ids[folded_id] = true end
 				for _, folded in status.ids(older) do
-					table.insert(it.folded, folded)
+					if not seen_ids[folded] then
+						seen_ids[folded] = true
+						table.insert(it.folded, folded)
+					end
 				end
 				superseded[older] = true
 			end
