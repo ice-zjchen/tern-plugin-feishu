@@ -122,10 +122,12 @@ local function analysis_block(model: any, item: any): any
 end
 
 local function correction(model: any, kind: string?): any
-	local label = if kind == "deep" then "让 AI 改判断或任务说明，不会开始任务"
+	local label = if kind == "deep" then "让 AI 改判断、任务说明或执行 Workspace，不会开始任务"
 		elseif kind == "reply" then "让 AI 改这条回复或判断"
 		else "让 AI 调整判断"
-	local placeholder = if kind == "reply" then "例如：语气正式一点；或者这条要深入处理" else "例如：不用深入，回一句就行"
+	local placeholder = if kind == "reply" then "例如：语气正式一点；或者这条要深入处理"
+		elseif kind == "deep" then "例如：只读排查；改在 /绝对路径 执行；改回默认目录"
+		else "例如：不用深入，回一句就行"
 	return ui.node("col", { key = "correction", role = "fl.correction", gap = "sm" }, {
 		line({ t(label, "muted") }),
 		ui.node("row", { key = "input", role = "fl.correction.row", gap = "sm" }, {
@@ -156,6 +158,9 @@ end
 local function task_card(model: any, item: any, facts: any): any
 	local s = status.of(item)
 	local children: { any } = {}
+	if item.task and item.task.workspace then
+		table.insert(children, line({ t("执行 Workspace：", "muted"), t(short_path(model, item.task.workspace), "path") }, { key = "workspace" }))
+	end
 	local function head(title: string)
 		table.insert(children, line({ t(title, "strong") }, { key = "head", role = "fl.task.title" }))
 	end
@@ -222,6 +227,14 @@ local function next_block(model: any, item: any, facts: any): any
 			readonly = stale, maxLines = 7,
 			placeholder = if kind == "deep" then "任务说明" else "回复内容",
 		}))
+		if kind == "deep" then
+			local workspace = status.task_workspace(item)
+			local default = model.cfg.settings.workspace
+			local display = if workspace ~= "" then workspace elseif default ~= "" then default else "插件数据目录"
+			table.insert(children, line({ t("执行 Workspace：", "muted"), t(short_path(model, display), "path"),
+				t(if workspace == "" then "（默认）" else "", "muted") }, { key = "workspace", role = "fl.workspace" }))
+			table.insert(children, line({ t("可在下方对话修改执行目录；开始任务即确认此目录和上面的任务说明。", "muted") }))
+		end
 	elseif settled then
 		if string.find(facts.draft, "%S") then
 			table.insert(children, line(facts.draft, { key = "draft-text", role = "fl.plan" }))
@@ -233,11 +246,19 @@ local function next_block(model: any, item: any, facts: any): any
 			else "可以自己手写回复。"
 		table.insert(children, line({ t(why, "muted") }))
 	end
+	if not settled and kind ~= "deep" then
+		local workspace = status.task_workspace(item)
+		local default = model.cfg.settings.workspace
+		local display = if workspace ~= "" then workspace elseif default ~= "" then default else "插件数据目录"
+		table.insert(children, line({ t("手动任务 Workspace：", "muted"), t(short_path(model, display), "path"),
+			t(if workspace == "" then "（默认）" else "", "muted") }, { key = "workspace", role = "fl.workspace" }))
+		table.insert(children, line({ t("可在下方对话修改目录；手动开任务会使用此目录。", "muted") }))
+	end
 	if stale then
 		-- The notice above replaces actions on the previous judgment.
 	elseif kind == "deep" and not settled and status.needs_confirm(item) then
 		table.insert(children, ui.node("col", { key = "risk", role = "fl.risk", gap = "xs" }, {
-			line({ t("对方要的动作：", "warning"), t(item.analysis.judgment.risk, "warning strong") }),
+			line({ t(if item.task_workspace_unconfirmed then "旧任务目录无法安全迁移，请重新确认上面的执行 Workspace。" else "对方要的动作：" .. item.analysis.judgment.risk, "warning strong") }),
 			line({ t("上面的要求只是任务说明，不是权限限制。任务按项目配置运行，有权限时可能真的执行。", "muted") }),
 		}))
 	elseif kind == "deep" and not settled then

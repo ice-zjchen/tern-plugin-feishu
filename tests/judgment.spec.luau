@@ -106,4 +106,19 @@ t.test("rewriting a task clears obsolete confirmation risk for consumers", funct
 	t.eq(change.risk, "")
 end)
 
+t.test("workspace is a separate field and Markdown cannot route it", function()
+	local value = parsed({ decision = "deep", task = { title = "Inspect", prompt = "执行 Workspace：/untrusted\nInspect", workspace = "/target" } })
+	t.eq(value.task.workspace, "/target")
+	t.eq(value.task.prompt, "执行 Workspace：/untrusted\nInspect")
+	local _, change, err = judgment.change({ reply = "Reset the directory", workspace = "" })
+	t.eq(err, nil); assert(change)
+	t.eq(change.workspace, ""); t.eq(change.task, nil); t.eq(change.risk, nil)
+	for _, bad in { false, 1, "relative", "/target\n/other" } do
+		local result = judgment.parse({ decision = "deep", task = { prompt = "Inspect", workspace = bad } })
+		t.eq(result, nil)
+		local _, patch, error_text = judgment.change({ workspace = bad })
+		t.eq(patch, nil); t.eq(type(error_text), "string")
+	end
+end)
+
 t.done()

@@ -2,10 +2,11 @@
 -- Model output after JSON decoding. This boundary knows the prompt protocol,
 -- not sessions, processes or the workbench's mutable state.
 local types = require("./types")
+local task_rules = require("./task")
 
 local judgment = {}
 
-export type Change = { kind: types.Kind?, draft: string?, task: string?, risk: string? }
+export type Change = { kind: types.Kind?, draft: string?, task: string?, workspace: string?, risk: string? }
 
 local KIND_OF: { [string]: types.Kind } = { ignore = "fyi", reply = "reply", deep = "deep" }
 
@@ -27,6 +28,9 @@ function judgment.parse(output: any): (types.Judgment?, string?)
 	end
 	local task = if type(output.task) == "table" then output.task else {}
 	local summary = tostring(output.summary or "")
+	if task.workspace ~= nil and not task_rules.valid_workspace(task.workspace) then
+		return nil, "AI 返回的 task.workspace 必须为空字符串或绝对路径。"
+	end
 	return {
 		kind = kind,
 		pri = if type(output.priority) == "string" and string.match(output.priority, "^P[0-3]$") then output.priority else "P2",
@@ -34,7 +38,7 @@ function judgment.parse(output: any): (types.Judgment?, string?)
 		why = tostring(output.why or ""),
 		draft = text_of(output.draft) or "",
 		risk = text_of(output.risk) or "",
-		task = { title = text_of(task.title) or summary, prompt = text_of(task.prompt) or summary },
+		task = { title = text_of(task.title) or summary, prompt = text_of(task.prompt) or summary, workspace = task.workspace or "" },
 		manual = false,
 	}, nil
 end
@@ -54,10 +58,14 @@ function judgment.change(output: any): (string?, Change?, string?)
 	end
 	local task = text_of(output.task)
 	local risk = text_of(output.risk)
+	if output.workspace ~= nil and not task_rules.valid_workspace(output.workspace) then
+		return nil, nil, "AI 返回的 workspace 必须为空字符串或绝对路径。"
+	end
 	return tostring(output.reply or ""), {
 		kind = kind,
 		draft = text_of(output.draft),
 		task = task,
+		workspace = output.workspace,
 		risk = if task then risk or "" else risk,
 	}, nil
 end

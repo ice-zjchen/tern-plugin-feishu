@@ -14,6 +14,15 @@ t.test("markup finds unique image keys up to the limit and cleans them", functio
 	t.eq(markup.clean("hi ![Image](img_1)"), "hi [图片]")
 end)
 
+t.test("CLI image labels and Markdown preserve shared source order without bare-key guesses", function()
+	local s = "[Image: img_first] ![Image](img_second) [Image: img_first] [Image: img_third] bare img_not_resource"
+	local keys = markup.images(s, 3)
+	t.eq(keys[1], "img_first"); t.eq(keys[2], "img_second"); t.eq(keys[3], "img_third")
+	t.eq(#keys, 3)
+	t.eq(markup.clean(s), "[图片] [图片] [图片] [图片] bare img_not_resource")
+	t.eq(#markup.images("img_not_resource", 4), 0)
+end)
+
 t.test("markup.mentions_all recognises every CLI form", function()
 	t.eq(markup.mentions_all("@_all 开会"), true)
 	t.eq(markup.mentions_all('<at user_id="all">所有人</at>'), true)

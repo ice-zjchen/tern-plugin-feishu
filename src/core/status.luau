@@ -112,6 +112,11 @@ function status.task_text(m: Matter): string
 	return m.edits.task or (if j then j.task.prompt else "")
 end
 
+function status.task_workspace(m: Matter): string
+	local j = m.analysis.judgment
+	return m.edits.workspace or (if j then j.task.workspace else "")
+end
+
 -- What the editor shows: a deep matter's task, else its reply.
 function status.field_text(m: Matter): string
 	return if status.kind(m) == "deep" then status.task_text(m) else status.reply_text(m)
@@ -121,7 +126,7 @@ end
 function status.needs_confirm(m: Matter): boolean
 	local j = m.analysis.judgment
 	return not status.stale(m) and not status.settled(m) and m.disposition ~= "doing"
-		and j ~= nil and j.kind == "deep" and string.find(j.risk, "%S") ~= nil
+		and j ~= nil and j.kind == "deep" and (m.task_workspace_unconfirmed == true or string.find(j.risk, "%S") ~= nil)
 end
 
 export type Action = { key: string, label: string }
@@ -200,7 +205,7 @@ end
 function status.manual_judgment(): types.Judgment
 	return {
 		kind = "reply", pri = "P2", summary = "", why = "", draft = "", risk = "",
-		task = { title = "", prompt = "" }, manual = true,
+		task = { title = "", prompt = "", workspace = "" }, manual = true,
 	}
 end
 

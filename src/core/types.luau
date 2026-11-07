@@ -17,7 +17,7 @@ export type Judgment = {
 	why: string,
 	draft: string,
 	risk: string,
-	task: { title: string, prompt: string },
+	task: { title: string, prompt: string, workspace: string },
 	manual: boolean,
 }
 
@@ -58,6 +58,12 @@ export type Task = {
 	raw: string?,
 	-- Messages that arrived after the task started.
 	new_messages: number,
+	request_id: number?,
+	revision: number?,
+	workspace: string?,
+	default_workspace: string?,
+	task_text: string?,
+	title: string?,
 }
 
 export type ThreadMessage = {
@@ -101,7 +107,8 @@ export type Matter = {
 	-- Why a settled matter came back.
 	reopened: string?,
 	task: Task?,
-	edits: { reply: string?, task: string? },
+	edits: { reply: string?, task: string?, workspace: string? },
+	task_workspace_unconfirmed: boolean?,
 	talk: { Talk },
 	thread: { ThreadMessage }?,
 	thread_error: string?,

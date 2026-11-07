@@ -7,10 +7,13 @@ local judgment = require("../core/judgment")
 local markup = require("../shared/markup")
 local prompts = require("./prompts")
 local omp = require("./omp")
+local context_plan = require("../core/context")
+local vision = require("./vision")
+local stage = require("./stage")
 
 type Matter = types.Matter
 export type Extras = { others: { any }?, agenda: any }
-export type Current = { decision: string, draft: string, task: string }
+export type Current = { decision: string, draft: string, task: string, workspace: string }
 type Notice = (string?) -> ()
 
 local ai = {}
@@ -67,10 +70,7 @@ function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notic
 		})
 	end
 	omp.turn({ prompt = prompt, purpose = "analysis", resume = resume, images = images }, notice, function(text, session, cost, err, run)
-		if err then
-			done(nil, session, cost, err, run)
-			return
-		end
+		if err then done(nil, session, cost, err, run); return end
 		local output = omp.json_in(text or "")
 		if not output then
 			done(nil, session, cost, "AI 返回的格式不对：" .. string.sub(text or "", 1, 200), run)
@@ -83,7 +83,7 @@ end
 
 -- One turn about a matter, in its analysis session when it has one. The service
 -- returns a patch; the caller applies it only if this request is still current.
-function ai.converse(m: Matter, extras: Extras, current: Current, said: string, notice: Notice, done: (string?, judgment.Change?, string?, number, string?) -> ())
+function ai.converse(m: Matter, extras: Extras, current: Current, said: string, notice: Notice, done: (string?, judgment.Change?, string?, number, string?, omp.Run?) -> ())
 	local session = m.analysis.session
 	local none = prompts.render("chat", "none")
 	local prompt = prompts.render("chat", "turn", {
@@ -91,43 +91,75 @@ function ai.converse(m: Matter, extras: Extras, current: Current, said: string, 
 		decision = current.decision,
 		draft = if current.draft ~= "" then current.draft else none,
 		task = if current.task ~= "" then current.task else none,
+		workspace = tern.json.encode(current.workspace),
 		context = if session then "" else prompts.render("chat", "context", { context = context(m, extras, matter.agent_thread(m)) }),
 		format = prompts.render("chat", "format"),
 	})
-	omp.turn({ prompt = prompt, purpose = "chat", resume = session }, notice, function(text, next_session, cost, err)
+	omp.turn({ prompt = prompt, purpose = "chat", resume = session }, notice, function(text, next_session, cost, err, run)
 		if err then
-			done(nil, nil, next_session, cost, err)
+			done(nil, nil, next_session, cost, err, run)
 			return
 		end
 		local output = omp.json_in(text or "")
 		if not output then
 			-- Plain words are still an answer; the judgment just stays as it is.
-			done(text, {}, next_session, cost, nil)
+			done(text, {}, next_session, cost, nil, run)
 			return
 		end
 		local reply, change, parse_error = judgment.change(output)
-		done(reply, change, next_session, cost, parse_error)
+		done(reply, change, next_session, cost, parse_error, run)
 	end)
 end
 
--- Only a strongly related task gets a message locator and the trigger itself.
--- Keep the task/Feishu headings from the templates: workspace selection reads them.
-function ai.task_prompt(m: Matter, task: string?, related: boolean): string
-	local header = prompts.render("task", "header")
+-- Context is attached for a concrete information gap, not topic similarity.
+function ai.task_prompt(m: Matter, task: string?, plan: context_plan.Plan, needs: context_plan.Answer?, evidence_array: { any }?): string
+	assert(plan ~= "unknown", "未确定材料或讨论需求，不能启动任务")
+	local header = stage.mark("task", prompts.render("task", "header"))
 	local body = task or prompts.render("task", "open")
-	if not related then
-		return prompts.render("task", "weak", { header = header, task = body })
+	if plan == "none" then
+		return prompts.render("task", "none", { header = header, task = body })
 	end
-	return prompts.render("task", "strong", {
+	local current_id = m.latest_id or m.id
+	local referenced = task ~= nil and context_plan.has_locator(task, current_id)
+	local material_required = plan == "message" or (needs ~= nil and needs.materials.choice == "required")
+	local material_locators = {}
+	local seen = { [current_id] = true }
+	if task and material_required then
+		for _, evidence in evidence_array or {} do
+			if evidence.selected == true and evidence.status == "inspected" then
+				local source_id = evidence.source_message_id
+				if type(source_id) == "string" and not seen[source_id] then
+					seen[source_id] = true
+					if not context_plan.has_locator(task, source_id) then
+						table.insert(material_locators, prompts.render("task", "material_locator", { message_id = source_id }))
+					end
+				end
+			end
+		end
+	end
+	local guidance = {}
+	if not task then
+		table.insert(guidance, prompts.render("task", "manual"))
+	else
+		if material_required then
+			table.insert(guidance, prompts.render("task", "message"))
+		end
+		if plan == "conversation" then table.insert(guidance, prompts.render("task", "conversation")) end
+	end
+	return prompts.render("task", "attached", {
 		header = header,
+		guidance = table.concat(guidance, "\n"),
 		task = body,
 		chat = if m.chat_type == "p2p" then prompts.render("task", "p2p", { name = m.name }) else m.chat,
 		chat_id = m.chat_id,
-		message_id = m.latest_id or m.id,
+		locator = if referenced then prompts.render("task", "referenced") else prompts.render("task", "locator", { message_id = current_id }),
+		material_locators = table.concat(material_locators, "\n"),
 		time = m.time,
 		now = os.date("%Y-%m-%d %H:%M") :: string,
-		-- A message must not be able to close the block it is quoted in.
-		content = (string.gsub(markup.clean(m.content), "</?feishu_messages>", "")),
+		trigger = if referenced then "" else prompts.render("task", "trigger", {
+			-- A message must not be able to close the block it is quoted in.
+			content = (string.gsub(markup.clean(m.content), "</?feishu_messages>", "")),
+		}),
 	})
 end
 
@@ -135,28 +167,64 @@ end
 -- A fresh, disposable session cannot inherit unrelated triage context.
 function ai.prepare_task(m: Matter, task: string?, notice: Notice, done: (string?, number, string?) -> ())
 	if not task then
-		done(ai.task_prompt(m, nil, true), 0, nil)
+		done(ai.task_prompt(m, nil, "message"), 0, nil)
 		return
 	end
-	local prompt = prompts.render("relevance", "main", {
-		state = tern.json.encode({
-			task = task,
-			trigger = { message_id = m.latest_id or m.id, content = markup.clean(m.content) },
-			thread = matter.agent_thread(m),
-		}, true),
-	})
-	omp.turn({ prompt = prompt, purpose = "relevance", ephemeral = true }, notice, function(text, _session, cost, err)
-		if err then
-			done(nil, cost, err)
-			return
-		end
-		local output = omp.json_in(text or "")
-		if not output or (output.relation ~= "weak" and output.relation ~= "strong") then
-			done(nil, cost, "AI 没有给出有效的任务关联性判断。")
-			return
-		end
-		done(ai.task_prompt(m, task, output.relation == "strong"), cost, nil)
-	end)
+	local evidence_array = vision.describe(m, task)
+	local total_cost = 0
+	local function judge_needs(evidence: { any }, done_judging: (context_plan.Answer?, string?) -> ())
+		local input = {
+			state = {
+				task = task,
+				trigger = { message_id = m.latest_id or m.id, content = markup.clean(m.content) },
+				thread = matter.agent_thread(m),
+				evidence_array = evidence,
+			},
+			questions = {
+				materials = {
+					type = "choice", instructions = prompts.render("context", "materials"),
+					criteria = {
+						required = prompts.render("context", "materials_required"),
+						not_required = prompts.render("context", "materials_not_required"),
+						unknown = prompts.render("context", "materials_unknown"),
+					},
+				},
+				discussion = {
+					type = "choice", instructions = prompts.render("context", "discussion"),
+					criteria = {
+						required = prompts.render("context", "discussion_required"),
+						not_required = prompts.render("context", "discussion_not_required"),
+						unknown = prompts.render("context", "discussion_unknown"),
+					},
+				},
+			},
+		}
+		local prompt = prompts.render("context", "turn", { input = tern.json.encode(input, true) })
+		omp.turn({ prompt = prompt, purpose = "relevance", ephemeral = true }, notice, function(_text, _session, cost, err, run)
+			total_cost += cost
+			if err then done_judging(nil, err); return end
+			local answer, parse_error = context_plan.parse(run and run.context_judgment)
+			done_judging(answer, parse_error)
+		end)
+	end
+	local function finish(answer: context_plan.Answer?, err: string?)
+		if not answer then done(nil, total_cost, err or "未取得有效的材料与讨论需求判断"); return end
+		local blocker = err or context_plan.blocker(answer, evidence_array)
+		if blocker then done(nil, total_cost, blocker); return end
+		done(ai.task_prompt(m, task, answer.plan, answer, evidence_array), total_cost, nil)
+	end
+	if context_plan.use_vision(evidence_array) then
+		-- Selected screenshots go straight to the configured vision role: one
+		-- turn observes pixels (or reuses facts) and decides both needs.
+		vision.assess(m, task, notice, function(evidence, cost, needs, vision_error)
+			evidence_array, total_cost = evidence, total_cost + cost
+			local answer, parse_error = context_plan.from_vision(needs)
+			finish(answer, vision_error or parse_error)
+		end)
+	else
+		-- No task-selected pictures: typed questions through the judge role.
+		judge_needs(evidence_array, finish)
+	end
 end
 
 return ai

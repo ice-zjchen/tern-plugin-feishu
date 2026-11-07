@@ -56,6 +56,9 @@ local function open_task(link, cx)
 	local ok, err = pcall(function()
 		local open = if type(current.pane) == "number" then agent_at(cx, current.pane) else nil
 		local route = task_rules.route(current, open ~= nil and open.state ~= "exited")
+		if route ~= "focus" then
+			assert(task_rules.valid_request(current) and current.matter_id == id, "旧任务需回工作台重新确认执行目录")
+		end
 		if route == "focus" then cx.layout:focus(current.pane); return end
 		if route ~= "start" then
 			if current.state ~= "done" then bridge.update(id, request_id, { state = "closed" }) end
@@ -66,7 +69,7 @@ local function open_task(link, cx)
 		assert(bridge.update(id, request_id, { state = "starting", launched = true, began = false, result = false }), "任务请求已变化")
 		local env = launch.prepare()
 		if env.warning then cx:toast("info", "工作目录已回退", env.warning) end
-		local cwd = launch.task_workspace(current.task_text, env.cwd)
+		local cwd = launch.task_workspace(current.workspace, current.default_workspace)
 		-- A different workspace discovers its own project configuration and skills.
 		local config = if cwd == env.cwd then " --config " .. launch.quote(env.config) else ""
 		local pane = cx.agents:start({ prompt = current.prompt, cwd = cwd, how = "tab",

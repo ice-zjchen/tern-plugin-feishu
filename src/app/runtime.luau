@@ -16,6 +16,10 @@ local ids = require("../ui/ids")
 local input = require("../ui/input")
 local ui = require("../ui/inbox")
 local fetch = require("./fetch")
+local workbench_events = require("../services/events")
+local launch = require("../services/launch")
+local status = require("../core/status")
+local task_rules = require("../core/task")
 
 local runtime = {}
 local active = nil
@@ -72,7 +76,9 @@ local function sync_timers(rt)
 		timer(rt, "tick", 60000, function() dispatch(rt, { type = "tick" }) end)
 	end
 	local tasked = false
-	for _, m in rt.model.items do if m.disposition == "doing" then tasked = true; break end end
+	for _, m in rt.model.items do
+		if not status.settled(m) and (m.disposition == "doing" or (m.task and m.task.request_id)) then tasked = true; break end
+	end
 	if tasked and not rt.timers.tasks then
 		timer(rt, "tasks", 3000, function() poll_tasks(rt); if alive(rt) then sync_timers(rt) end end)
 	elseif not tasked then cancel(rt, "tasks") end
@@ -92,7 +98,7 @@ end
 poll_tasks = function(rt)
 	local tasks, changed = {}, false
 	for _, m in rt.model.items do
-		if m.disposition == "doing" then
+		if not status.settled(m) and (m.disposition == "doing" or (m.task and m.task.request_id)) then
 			local task = bridge.task(m.id)
 			tasks[m.id] = task
 			local phase = if task then task.state else "closed"
@@ -156,14 +162,27 @@ execute = function(rt, effect)
 				cost = cost, error = err, run = run, through = through })
 		end)
 	elseif ty == "converse" then
-		ai.converse(effect.matter, effect.extras, effect.current, effect.said, function(w) notice(rt, w) end, function(reply, change, session, cost, err)
-			dispatch(rt, { type = "conversed", id = effect.id, gen = effect.gen, reply = reply, change = change, session = session, cost = cost, error = err })
+		ai.converse(effect.matter, effect.extras, effect.current, effect.said, function(w) notice(rt, w) end, function(reply, change, session, cost, err, run)
+			dispatch(rt, { type = "conversed", id = effect.id, gen = effect.gen, reply = reply, change = change,
+				session = session, cost = cost, error = err, run = run })
 		end)
 	elseif ty == "prepare" then
 		ai.prepare_task(effect.matter, effect.task, function(w) notice(rt, w) end, function(prompt, cost, err)
 			dispatch(rt, { type = "prepared", id = effect.id, gen = effect.gen, prompt = prompt, cost = cost, error = err })
 		end)
-	elseif ty == "write-task" then bridge.start(effect.id, effect.prompt, effect.title, effect.task_text)
+	elseif ty == "write-task" then
+		assert(effect.default_workspace_setting == settings.get("workspace"), "默认 Workspace 已变化，请重新确认")
+		local env = launch.prepare()
+		assert(not env.warning, env.warning or "默认 Workspace 不可用，请重新确认")
+		-- Validate routing before the confirmation can become visible to the window.
+		local cwd = launch.task_workspace(effect.workspace, env.cwd)
+		effect.default_workspace = env.cwd
+		local request = bridge.start(effect.id, effect, function(record)
+			workbench_events.confirmed(record, rt.model.cfg.now, effect.session)
+		end)
+		dispatch(rt, { type = "task-written", id = effect.id, revision = effect.revision,
+			request_id = request.request_id, workspace = cwd, default_workspace = request.default_workspace })
+	elseif ty == "workbench-event" then workbench_events.append(effect.event)
 	elseif ty == "delete-task" then
 		if bridge.request(effect.id) or bridge.state(effect.id) then
 			bridge.remove(effect.id)
@@ -171,9 +190,6 @@ execute = function(rt, effect)
 			cx:open(bridge.CLEANUP_LINK .. effect.id)
 		end
 	elseif ty == "open-task" then cx:open(bridge.LINK .. effect.id)
-	elseif ty == "reopen-task" then
-		if bridge.restart(effect.id) then cx:open(bridge.LINK .. effect.id)
-		else dispatch(rt, { type = "task-missing", id = effect.id }) end
 	elseif ty == "poll-tasks" then poll_tasks(rt)
 	elseif ty == "spoken" then
 		lark.search({ filters = { "--chat-id", effect.chat_id, "--sender", effect.me }, since = effect.since }, function(data, err)
@@ -201,6 +217,10 @@ local function failed_effect(rt, effect, err)
 		dispatch(rt, { type = event_type, id = effect.id, gen = effect.gen, latest = effect.latest, error = tostring(err), found = {}, added = effect.added })
 	elseif ty == "image" then dispatch(rt, { type = "image", key = effect.key, error = tostring(err) })
 	elseif ty == "history-search" then dispatch(rt, { type = "history", name = "result", gen = effect.gen, error = tostring(err) })
+	elseif ty == "write-task" then
+		dispatch(rt, { type = "task-write-failed", id = effect.id, revision = effect.revision, error = tostring(err) })
+	elseif ty == "workbench-event" then
+		dispatch(rt, { type = "notice", warning = "工作台事件保存失败：" .. tostring(err) })
 	else error(err, 0) end
 end
 
@@ -239,6 +259,17 @@ function runtime.attach(cx, saved)
 	local model = store.load(cfg) or snapshot.empty(cfg)
 	local ids = {}; for _, m in model.items do table.insert(ids, m.id) end
 	bridge.migrate(ids)
+	-- Recover a publication interrupted before task-written reached the snapshot;
+	-- its confirmation already exists. This never starts or reconfirms old work.
+	for _, m in model.items do
+		local request = bridge.request(m.id)
+		if m.task and not m.task.request_id and task_rules.valid_request(request)
+			and request.matter_id == m.id and m.task.revision == request.revision then
+			m.task.request_id, m.task.default_workspace = request.request_id, request.default_workspace
+			m.task.workspace = task_rules.workspace(request.workspace, request.default_workspace)
+			m.task.task_text, m.task.title = request.task_text, request.title
+		end
+	end
 	if saved and views.known(saved.view) then model.view = saved.view end
 	local rt = { model = model, panes = { [cx.pane] = cx }, timers = {}, events = {}, dispatching = false, closed = false }
 	active = rt

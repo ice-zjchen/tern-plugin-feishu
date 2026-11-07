@@ -41,7 +41,7 @@ t.test("only an absent snapshot is no data", function()
 	for _, value in { false, 0, "", {} } do
 		t.errors(function() snapshot.decode(value, config()) end, "snapshot")
 	end
-	for _, version in { 0, 3, "2" } do
+	for _, version in { 0, 4, "2" } do
 		t.errors(function() snapshot.decode({ version = version, items = {} }, config()) end, "Unsupported inbox snapshot version")
 	end
 end)
@@ -154,7 +154,7 @@ t.test("v1 undated context is discarded without discarding durable analysis", fu
 	t.eq(old.thread[1].time, "03:00")
 end)
 
-t.test("task execution survives migration and v2 restore without restarting it", function()
+t.test("task execution survives migration and v3 restore without restarting it", function()
 	for _, phase in { "starting", "working", "waiting", "done", "closed" } do
 		local old = legacy_item("task-example")
 		old.analysis.state = "deep"
@@ -194,7 +194,7 @@ t.test("running analysis restores failed and an interrupted conversation gets on
 	t.eq(#again.items[1].talk, 2)
 end)
 
-t.test("v2 running markers never turn into queued work", function()
+t.test("v3 running markers never turn into queued work", function()
 	local model = model_with_item()
 	local a = model.items[1].analysis
 	a.phase, a.gen, a.reanalyze = "running", 42, true
@@ -216,7 +216,7 @@ t.test("v2 running markers never turn into queued work", function()
 	end
 end)
 
-t.test("v2 preserves user and navigation state with fresh config and detached values", function()
+t.test("v3 preserves user and navigation state with fresh config and detached values", function()
 	local model = model_with_item()
 	local item = model.items[1]
 	item.revision = 7
@@ -242,7 +242,7 @@ t.test("v2 preserves user and navigation state with fresh config and detached va
 	cfg.settings.agent_enabled = false
 	local loaded = restored(encoded, cfg)
 	local copy = loaded.items[1]
-	t.eq(encoded.version, 2)
+	t.eq(encoded.version, 3)
 	t.eq(loaded.cfg, cfg)
 	t.eq(loaded.cfg.settings.agent_enabled, false)
 	t.eq(copy.revision, 7)
@@ -286,7 +286,7 @@ t.test("v2 preserves user and navigation state with fresh config and detached va
 	t.eq(encoded.agenda.events[1].summary, "Synthetic event")
 end)
 
-t.test("v2 excludes handles, cached flags, request state and settings", function()
+t.test("v3 excludes handles, cached flags, request state and settings", function()
 	local model: any = model_with_item()
 	model.cx, model.poll, model.save_pending = function() end, function() end, true
 	model.loading, model.loading_more, model.gen, model.wake_at = true, true, 99, 1234
@@ -373,6 +373,36 @@ t.test("nonserializable and cyclic dynamic data are explicit errors", function()
 	local stored = packed()
 	stored.agenda = cycle
 	t.errors(function() snapshot.decode(stored, config()) end, "acyclic JSON data")
+end)
+
+t.test("old Markdown directory migrates once and current task text never routes", function()
+	local stored = packed(); stored.version = 2
+	stored.items[1].analysis.judgment.task.prompt = "执行 Workspace：/target\nInspect the change"
+	stored.items[1].analysis.judgment.task.workspace = nil
+	local model = restored(stored)
+	t.eq(status.task_workspace(model.items[1]), "/target")
+	t.eq(status.task_text(model.items[1]), "Inspect the change")
+	model.items[1].edits.task = "执行 Workspace：/not-a-route\nBusiness text"
+	model.items[1].edits.workspace = ""
+	local current = restored(snapshot.encode(model))
+	t.eq(status.task_workspace(current.items[1]), "")
+	t.eq(status.task_text(current.items[1]), "执行 Workspace：/not-a-route\nBusiness text")
+	t.eq(stored.items[1].analysis.judgment.task.prompt, "执行 Workspace：/target\nInspect the change")
+end)
+
+t.test("ambiguous historical routing requires visible directory reconfirmation", function()
+	for _, prefix in { "执行 Workspace：", "附加仓库：/old" } do
+		local stored = packed(); stored.version = 2
+		local j = stored.items[1].analysis.judgment
+		j.kind, j.task.prompt, j.task.workspace = "deep", prefix .. "\nInspect", nil
+		local model = restored(stored)
+		local item = model.items[1]
+		t.eq(status.task_workspace(item), ""); t.eq(item.task_workspace_unconfirmed, true)
+		t.eq(status.needs_confirm(item), true)
+		t.eq(status.task_text(item), "Inspect")
+		local next_model = restored(snapshot.encode(model))
+		t.eq(next_model.items[1].task_workspace_unconfirmed, true)
+	end
 end)
 
 t.done()

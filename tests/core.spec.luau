@@ -26,7 +26,7 @@ local function add(s: Model, id: string, kind: types.Kind?): Matter
 	m.mention, m.via, m.analysis.settle_at = true, "@我", nil
 	if kind then
 		local j = status.manual_judgment(); j.kind, j.manual, j.summary = kind, false, id
-		j.task = { prompt = "分析仓库", title = "任务" }
+		j.task = { prompt = "分析仓库", title = "任务", workspace = "" }
 		j.draft = "我来看看"
 		m.analysis.phase, m.analysis.judgment = "done", j
 	end
@@ -111,8 +111,10 @@ end)
 
 t.test("task idle with a reply becomes a draft, not automatic completion", function()
 	local s = model(); local m = add(s, "task", "deep")
-	m.disposition, m.task = "doing", { phase = "working", new_messages = 0 }
-	update.apply(s, { type = "tasks", tasks = { task = { state = "done", result = "检查完毕\n<reply>已确认原因</reply>" } } })
+	m.disposition, m.task = "doing", { phase = "working", new_messages = 0, request_id = 1, revision = 0,
+		task_text = "分析仓库", workspace = "/repo", default_workspace = "/default" }
+	update.apply(s, { type = "tasks", tasks = { task = { version = 2, matter_id = m.id, revision = 0,
+		request_id = 1, state = "done", result = "检查完毕\n<reply>已确认原因</reply>" } } })
 	t.eq(m.disposition, nil)
 	t.eq(status.kind(m), "reply"); t.eq(status.reply_text(m), "已确认原因")
 	t.eq(status.settled(m), false)
@@ -120,8 +122,10 @@ end)
 
 t.test("task round ending without a reply stays pending user confirmation", function()
 	local s = model(); local m = add(s, "task", "deep")
-	m.disposition, m.task = "doing", { phase = "working", new_messages = 0 }
-	update.apply(s, { type = "tasks", tasks = { task = { state = "done", result = "已检查，待你核对" } } })
+	m.disposition, m.task = "doing", { phase = "working", new_messages = 0, request_id = 1, revision = 0,
+		task_text = "分析仓库", workspace = "/repo", default_workspace = "/default" }
+	update.apply(s, { type = "tasks", tasks = { task = { version = 2, matter_id = m.id, revision = 0,
+		request_id = 1, state = "done", result = "已检查，待你核对" } } })
 	t.eq(m.disposition, "doing"); t.eq(status.task_needs_me(m), true)
 	t.eq(views.counts(s.items).pending, 1); t.eq(views.counts(s.items).doing, 0)
 end)
@@ -245,6 +249,103 @@ t.test("snapshot restoration normalizes repeated references without losing messa
 	local ids = status.ids(restored.items[1])
 	t.eq(#ids, 3)
 	t.eq(ids[1], "main"); t.eq(ids[2], "first"); t.eq(ids[3], "second")
+end)
+
+t.test("workspace-only corrections are visible state and invalidate preparation", function()
+	local s = model(); local m = add(s, "workspace", "deep"); m.thread = {}
+	s.command = "改在 /target 执行"
+	local chat = effects(action(s, "run-command"), "converse")[1]
+	local out = update.apply(s, { type = "conversed", id = m.id, gen = chat.gen, reply = "已改目录", change = { workspace = "/target" } })
+	t.eq(status.task_workspace(m), "/target"); t.eq(status.task_text(m), "分析仓库")
+	local correction = effects(out, "workbench-event")[1].event
+	t.eq(correction.type, "workbench_chat"); t.eq(correction.data.user_said, "改在 /target 执行")
+	t.eq(correction.data.content, nil)
+	local req = effects(action(s, "primary"), "prepare")[1]
+	t.eq(m.preparation.workspace, "/target")
+	s.command = "改回默认目录"
+	chat = effects(action(s, "run-command"), "converse")[1]
+	update.apply(s, { type = "conversed", id = m.id, gen = chat.gen, reply = "已改", change = { workspace = "" } })
+	t.eq(status.task_workspace(m), "")
+	out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "outdated" })
+	t.eq(#effects(out, "write-task"), 0)
+end)
+
+t.test("structured directory survives task text editing and launch awaits durable confirmation", function()
+	local s = model(); local m = add(s, "explicit", "deep"); m.thread = {}
+	m.edits.workspace = "/target"
+	m.edits.task = "执行 Workspace：/not-a-route\n只读排查"
+	local req = effects(action(s, "primary"), "prepare")[1]
+	local out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "confirmed prompt" })
+	local write = effects(out, "write-task")[1]
+	t.eq(write.workspace, "/target"); t.eq(write.task_text, m.edits.task)
+	t.eq(write.revision, 0); t.eq(#effects(out, "open-task"), 0)
+	out = update.apply(s, { type = "task-written", id = m.id, revision = 0, request_id = 7, workspace = "/target", default_workspace = "/workflow" })
+	t.eq(#effects(out, "open-task"), 1); t.eq((m.task :: types.Task).request_id, 7)
+	local restored = snapshot.decode(snapshot.encode(s), s.cfg)
+	assert(restored)
+	t.eq((restored.items[1].task :: types.Task).default_workspace, "/workflow")
+end)
+
+t.test("task result events bind only current request and never replay on polling", function()
+	local s = model(); local m = add(s, "result", "deep")
+	m.disposition, m.task = "doing", { phase = "working", new_messages = 0, request_id = 7, revision = 2,
+		task_text = "Confirmed business task", workspace = "/target", default_workspace = "/workflow" }
+	local state = { version = 2, matter_id = m.id, revision = 2, request_id = 6, state = "done", result = "Stale result" }
+	local out = update.apply(s, { type = "tasks", tasks = { result = state } })
+	t.eq((m.task :: types.Task).phase, "working"); t.eq(#effects(out, "workbench-event"), 0)
+	state.request_id, state.result = 7, "Actual result"
+	out = update.apply(s, { type = "tasks", tasks = { result = state } })
+	local result = effects(out, "workbench-event")[1].event
+	t.eq(result.type, "task_result"); t.eq(result.request_id, 7); t.eq(result.revision, 2)
+	t.eq(result.workspace, "/workflow"); t.eq(result.data.execution_workspace, "/target")
+	t.eq(result.data.task, "Confirmed business task"); t.eq(result.data.final, "Actual result")
+	out = update.apply(s, { type = "tasks", tasks = { result = state } })
+	t.eq(#effects(out, "workbench-event"), 0)
+end)
+
+t.test("accepted analysis emits judgment summaries without original source messages", function()
+	local s = model(); local m = add(s, "analysis-event", "deep")
+	m.content, m.thread = "Third party raw message", { { id = "raw", content = "Raw thread", sender = "Other", time = "", deleted = false, mine = false } }
+	m.analysis.phase, m.analysis.gen = "running", 9
+	local j = status.manual_judgment(); j.kind, j.manual, j.summary = "deep", false, "Decision summary"
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = 9, judgment = j, session = "session", run = { cwd = "/workflow" } })
+	local event = effects(out, "workbench-event")[1].event
+	t.eq(event.type, "analysis"); t.eq(event.workspace, "/workflow"); t.eq(event.session, "session")
+	t.eq(event.data.result.summary, "Decision summary"); t.eq(event.data.content, nil); t.eq(event.data.thread, nil)
+	out = update.apply(s, { type = "analyzed", id = m.id, gen = 9, judgment = j })
+	t.eq(#effects(out, "workbench-event"), 0)
+end)
+
+t.test("chat events use the run directory even when settings change mid-turn", function()
+	local s = model(); local m = add(s, "chat-workspace", "deep"); m.thread = {}
+	s.cfg.settings.workspace, s.command = "/original", "Only inspect"
+	local req = effects(action(s, "run-command"), "converse")[1]
+	s.cfg.settings.workspace = "/changed"
+	local out = update.apply(s, { type = "conversed", id = m.id, gen = req.gen, reply = "Updated",
+		change = { task = "Only inspect", risk = "" }, run = { cwd = "/original" } })
+	local event = effects(out, "workbench-event")[1].event
+	t.eq(event.workspace, "/original")
+end)
+
+t.test("default directory changes during preparation require new confirmation", function()
+	local s = model(); local m = add(s, "directory-change", "deep"); m.thread = {}
+	s.cfg.settings.workspace = "/original"
+	local req = effects(action(s, "primary"), "prepare")[1]
+	s.cfg.settings.workspace = "/changed"
+	local out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "Old workspace prompt" })
+	t.eq(#effects(out, "write-task"), 0); t.eq(m.disposition, nil)
+end)
+
+t.test("historical task results stay read-only and ambiguous restarts require reconfirmation", function()
+	local s = model(); local m = add(s, "historical", "deep")
+	m.disposition, m.task = "doing", { phase = "working", new_messages = 0 }
+	local out = update.apply(s, { type = "tasks", tasks = { historical = { request_id = 0, state = "done", result = "Old result" } } })
+	t.eq(#effects(out, "workbench-event"), 0); t.eq((m.task :: types.Task).result, "Old result")
+	m.task = { phase = "closed", new_messages = 0 }
+	m.task_workspace_unconfirmed = true
+	out = action(s, "primary")
+	t.eq(#effects(out, "prepare"), 0); t.eq(m.disposition, nil)
+	t.eq(status.needs_confirm(m), true)
 end)
 
 t.done()

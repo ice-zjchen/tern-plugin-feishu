@@ -3,6 +3,7 @@
 local tern = require("tern")
 local settings = require("../shared/settings")
 local task = require("../core/task")
+local stage = require("./stage")
 
 local launch = {}
 
@@ -30,7 +31,17 @@ local function absolute(path: string, base: string): string
 	return if string.sub(path, 1, 1) == "/" then path else base .. "/" .. path
 end
 
-function launch.prepare(): any
+function launch.prepare(purpose: stage.Purpose?): any
+	if purpose and stage.isolated(purpose) then
+		local env = stage.environment(purpose, tern.plugin.data)
+		tern.fs.mkdir(env.cwd)
+		assert(pcall(tern.fs.list, env.cwd), "无法读取阶段隔离目录：" .. env.cwd)
+		env.overlay.workspace.additionalDirectories = tern.json.array()
+		env.overlay.skills.customDirectories = tern.json.array()
+		tern.fs.write(env.config, tern.json.encode(env.overlay))
+		tern.fs.write(env.guard, tern.fs.read("src/services/stage_guard.mjs"))
+		return env
+	end
 	local workspace = settings.get("workspace")
 	local cwd = if workspace == "" then tern.plugin.data else absolute(workspace, tern.plugin.data)
 	local warning: string? = nil
@@ -94,14 +105,15 @@ function launch.path(): string
 	return table.concat(dirs, ":")
 end
 
--- Only the first line of the user-confirmed task can select a workspace.
--- The registry belongs to the analysis workspace; message context is never read.
-function launch.task_workspace(task_text: string?, default: string): string
-	local directory = task.workspace(task_text, default)
-	if directory == default then return default end
-	local ok, registry = pcall(tern.fs.read, default .. "/workspaces.md")
-	assert(ok, "无法读取执行 Workspace 清单 workspaces.md")
-	assert(task.allowed(directory, default, registry), "不在 workspaces.md 中的执行 Workspace：" .. directory)
+-- The confirmed request owns the directory field and its frozen default.
+-- Neither Markdown nor third-party message context selects an execution cwd.
+function launch.task_workspace(workspace: string, default: string): string
+	local directory = task.workspace(workspace, default)
+	if directory ~= default then
+		local ok, registry = pcall(tern.fs.read, default .. "/workspaces.md")
+		assert(ok, "无法读取执行 Workspace 清单 workspaces.md")
+		assert(task.allowed(directory, default, registry), "不在 workspaces.md 中的执行 Workspace：" .. directory)
+	end
 	assert(pcall(tern.fs.list, directory), "执行 Workspace 不存在或不可读：" .. directory)
 	return directory
 end

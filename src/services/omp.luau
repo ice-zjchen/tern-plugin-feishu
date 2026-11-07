@@ -1,10 +1,11 @@
--- Headless omp turns: `omp -p --mode json` with the workbench's system prompt,
--- in the configured workspace, with the model chosen for the turn's purpose.
+-- Headless omp turns with purpose-specific launch policy and output evidence.
 local tern = require("tern")
 local settings = require("../shared/settings")
 local launch = require("./launch")
 local prompts = require("./prompts")
+local stage = require("./stage")
 local text = require("../shared/text")
+local context_trace = require("../core/context_trace")
 
 local omp = {}
 
@@ -12,8 +13,8 @@ local TIMEOUT_MS = 180000
 local MAX_STEPS = 30
 
 -- What a turn is for, and which setting picks its model ("" keeps omp's default).
-export type Purpose = "analysis" | "chat" | "relevance"
-local MODEL_SETTING: { [Purpose]: string } = {
+export type Purpose = "analysis" | "chat" | "relevance" | "vision"
+local MODEL_SETTING: { [string]: string } = {
 	analysis = "model_analysis",
 	chat = "model_chat",
 	relevance = "model_relevance",
@@ -28,6 +29,8 @@ export type Turn = {
 	images: { string }?,
 	-- No session file at all: for one-off judgments nothing should resume.
 	ephemeral: boolean?,
+	-- Replaces the default system prompt for specialized, non-triage turns.
+	system_prompt: string?,
 }
 
 export type Step = { tool: string, target: string?, failed: boolean? }
@@ -35,6 +38,7 @@ export type Step = { tool: string, target: string?, failed: boolean? }
 export type Run = {
 	steps: { Step }, more_steps: number, model: string?, provider: string?, thinking: string?,
 	cwd: string?, skills: string?, incremental: boolean?, seconds: number?, cost: number?, at: string?,
+	context_judgment: any,
 }
 
 export type Done = (text: string?, session: string?, cost: number, err: string?, run: Run?) -> ()
@@ -78,6 +82,7 @@ local function read_events(stdout: string): (string?, string?, number, string?, 
 	local session, said, cost, failure = nil, nil, 0, nil
 	local run: any = { steps = {}, more_steps = 0 }
 	local by_call: { [any]: any } = {}
+	local trace = context_trace.new()
 	for line in string.gmatch(stdout, "[^\n]+") do
 		local ok, event = pcall(tern.json.decode, line)
 		if ok and type(event) == "table" then
@@ -93,6 +98,8 @@ local function read_events(stdout: string): (string?, string?, number, string?, 
 				local parts = {}
 				for _, part in content do
 					if type(part) == "table" and part.type == "toolCall" then
+						context_trace.call(trace, part)
+						run.context_judgment = trace.answer
 						if #run.steps < MAX_STEPS then
 							local step = step_of(part)
 							table.insert(run.steps, step)
@@ -108,6 +115,17 @@ local function read_events(stdout: string): (string?, string?, number, string?, 
 					local step = type(result) == "table" and by_call[result.toolCallId]
 					if step then
 						step.failed = result.isError == true
+					end
+					if type(result) == "table" and trace.calls[result.toolCallId] then
+						local value = nil
+						for _, part in result.content or {} do
+							if part.type == "text" and type(part.text) == "string" then
+								local parsed = omp.json_in(part.text)
+								if parsed and type(parsed.materials) == "table" and type(parsed.discussion) == "table" then value = parsed end
+							end
+						end
+						context_trace.result(trace, result.toolCallId, result.isError == true, value)
+						run.context_judgment = trace.answer
 					end
 				end
 				local usage = message.usage
@@ -142,52 +160,34 @@ end
 -- Runs one turn. `notice` gets the workspace fallback warning (or nil);
 -- `done` gets the assistant's final text, the session, the cost and the run record.
 function omp.turn(turn: Turn, notice: (string?) -> (), done: Done)
-	local prepared, env = pcall(launch.prepare)
+	local resume = if stage.isolated(turn.purpose) then nil else turn.resume
+	local prepared, env = pcall(launch.prepare, turn.purpose)
 	if not prepared then
-		done(nil, turn.resume, 0, "无法准备 AI 运行目录或配置：" .. tostring(env), nil)
+		done(nil, resume, 0, "无法准备 AI 运行目录或配置：" .. tostring(env), nil)
 		return
 	end
 	notice(env.warning)
-	-- Extensions stay on: they can provide the configured default model.
-	local argv = {
-		launch.program(), "-p", "--mode", "json", "--config", env.config,
-		"--cwd", env.cwd, "--allow-home", "--no-title",
-		"--append-system-prompt", prompts.render("system", "main"),
-	}
-	if turn.ephemeral then
-		table.insert(argv, "--no-session")
-	else
-		table.insert(argv, "--session-dir")
-		table.insert(argv, env.sessions)
-	end
-	local model = settings.get(MODEL_SETTING[turn.purpose])
-	if model ~= "" then
-		table.insert(argv, "--model")
-		table.insert(argv, model)
-	end
+	local system = turn.system_prompt or (if turn.purpose == "relevance" then prompts.render("context", "system")
+		elseif turn.purpose == "vision" then prompts.render("vision", "assess_system")
+		else prompts.render("system", "main"))
+	local model = if turn.purpose == "vision" then "" else settings.get(MODEL_SETTING[turn.purpose])
 	local thinking = settings.get("thinking")
-	if thinking ~= "default" then
-		table.insert(argv, "--thinking")
-		table.insert(argv, thinking)
-	end
-	if turn.resume then
-		table.insert(argv, "--resume")
-		table.insert(argv, turn.resume)
-	end
-	-- Images live under the plugin's data folder; omp runs in the workspace.
-	for _, path in turn.images or {} do
-		table.insert(argv, "@" .. tern.plugin.data .. "/" .. path)
+	local command = stage.command(turn, env, launch.program(), system, model, thinking, tern.plugin.data)
+	local process_env = { PATH = launch.path() }
+	if stage.isolated(turn.purpose) then
+		process_env.FEISHU_WORKBENCH_STAGE = turn.purpose
+		process_env.FEISHU_WORKBENCH_SYSTEM_PROMPT = system
 	end
 	local began = os.time()
 	local started = pcall(function()
-		tern.process.run(argv, { cwd = env.cwd, env = { PATH = launch.path() }, stdin = turn.prompt, timeout_ms = TIMEOUT_MS }, function(result)
+		tern.process.run(command.argv, { cwd = env.cwd, env = process_env, stdin = command.prompt, timeout_ms = TIMEOUT_MS }, function(result)
 			local session, said, cost, failure, run = read_events(result.stdout or "")
-			session = session or turn.resume
-			run.cwd, run.skills, run.incremental = env.cwd, env.skills, turn.resume ~= nil
+			session = session or resume
+			run.cwd, run.skills, run.incremental = env.cwd, env.skills, resume ~= nil
 			run.thinking = run.thinking or thinking
 			run.seconds, run.cost, run.at = os.time() - began, cost, os.date("%m-%d %H:%M") :: string
 			if result.timed_out then
-				done(nil, turn.resume, 0, "AI 超时（" .. tostring(TIMEOUT_MS // 1000) .. " 秒）。", run)
+				done(nil, resume, 0, "AI 超时（" .. tostring(TIMEOUT_MS // 1000) .. " 秒）。", run)
 			elseif result.status ~= 0 then
 				done(nil, session, cost, "AI 程序退出码 " .. tostring(result.status) .. "：" .. first_error_line(result.stderr), run)
 			elseif failure then
@@ -200,7 +200,7 @@ function omp.turn(turn: Turn, notice: (string?) -> (), done: Done)
 		end)
 	end)
 	if not started then
-		done(nil, turn.resume, 0, "无法启动 AI 程序。请通过命令面板「飞书 Feishu / Lark：设置 AI 程序路径」指定可执行文件。", nil)
+		done(nil, resume, 0, "无法启动 AI 程序。请通过命令面板「飞书 Feishu / Lark：设置 AI 程序路径」指定可执行文件。", nil)
 	end
 end
 

@@ -2,15 +2,15 @@
 -- Task-tab launch and lifecycle rules, independent of Tern and storage.
 local task = {}
 
--- Only the confirmed task's first line can choose a workspace. Message text,
--- quotes and other Markdown sections are never passed here.
-function task.workspace(task_text: string?, default: string): string
-	local first = if task_text then string.match(task_text, "^([^\n]*)") or "" else ""
-	assert(not string.match(first, "^附加仓库："), "旧附加仓库任务需重新确认执行 Workspace")
-	if not string.match(first, "^执行 Workspace：") then return default end
-	local directory = string.match(first, "^执行 Workspace：%s*(.-)%s*$") or ""
-	assert(directory ~= "", "执行 Workspace 不能为空")
-	return directory
+-- Execution routing accepts only the confirmed structured field, never Markdown.
+function task.valid_workspace(value: any): boolean
+	return type(value) == "string" and (value == "" or string.sub(value, 1, 1) == "/")
+		and not string.find(value, "[%c]")
+end
+
+function task.workspace(workspace: string, default: string): string
+	assert(task.valid_workspace(workspace), "执行 Workspace 必须为空或绝对路径")
+	return if workspace == "" then default else workspace
 end
 
 -- The trusted workspace registry's second column is a backtick-quoted absolute path.
@@ -21,6 +21,16 @@ function task.allowed(directory: string, default: string, registry: string): boo
 		if directory == candidate then return true end
 	end
 	return false
+end
+
+function task.valid_request(request: any): boolean
+	return type(request) == "table" and request.version == 2
+		and type(request.matter_id) == "string" and request.matter_id ~= ""
+		and type(request.revision) == "number" and request.revision >= 0 and request.revision < math.huge and request.revision % 1 == 0
+		and type(request.request_id) == "number" and request.request_id > 0 and request.request_id < math.huge and request.request_id % 1 == 0
+		and type(request.prompt) == "string" and type(request.title) == "string"
+		and type(request.task_text) == "string" and task.valid_workspace(request.workspace)
+		and task.valid_workspace(request.default_workspace) and request.default_workspace ~= ""
 end
 
 -- The initial idle notification is not the end of a round. Only an attempt that
@@ -45,10 +55,12 @@ end
 -- disposable; neither the host nor the window may write it back as a unit.
 function task.join(request: any, state: any): any
 	if not request then return nil end
-	local view: any = { prompt = request.prompt, title = request.title, task_text = request.task_text,
-		request_id = request.request_id, state = "starting" }
+	local view: any = { version = request.version, matter_id = request.matter_id, revision = request.revision,
+		prompt = request.prompt, title = request.title, task_text = request.task_text, workspace = request.workspace,
+		default_workspace = request.default_workspace,
+		request_id = request.request_id, state = if task.valid_request(request) then "starting" else "closed" }
 	if state and state.request_id == request.request_id then
-		for key, value in state do view[key] = value end
+		for _, key in { "state", "pane", "began", "launched", "result" } do view[key] = state[key] end
 	end
 	return view
 end

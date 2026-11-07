@@ -306,7 +306,7 @@ function matter.merge(model: Model, sources: { Source }, decided: { [string]: an
 				m.analysis.phase = "done"
 				m.analysis.judgment = {
 					kind = "fyi", pri = "P3", summary = "这条消息已撤回。", why = "", draft = "", risk = "",
-					task = { title = "", prompt = "" }, manual = false,
+					task = { title = "", prompt = "", workspace = "" }, manual = false,
 				}
 			end
 		end

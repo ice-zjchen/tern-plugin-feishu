@@ -157,10 +157,20 @@ local function extras(model: Model, except: Matter): any
 	return { others = others, agenda = if model.cfg.settings.use_agenda then model.agenda else nil }
 end
 
+local function decision(m: Matter): string
+	local kind = status.kind(m)
+	return if kind == "fyi" then "ignore" else kind or ""
+end
+
+local function workbench_event(model: Model, m: Matter, kind: string, data: any, out: { Effect }, workspace: string?)
+	emit(out, { type = "workbench-event", event = { type = kind, at = model.cfg.now, workspace = workspace,
+		matter_id = m.id, revision = m.revision, session = m.analysis.session, data = data } })
+end
+
 local function task_title(m: Matter, task: string?): string
 	local j = m.analysis.judgment
 	local what = if task and j and j.task.title ~= "" then j.task.title
-		elseif j and j.summary ~= "" then j.summary else markup.clean(m.content)
+		elseif j and j.summary ~= "" then j.summary else "手动处理消息"
 	local who = if m.chat_type == "p2p" then m.name else m.name .. "@" .. m.chat
 	return "飞书: " .. text.clip(text.flat(what), 24) .. " · " .. text.clip(text.flat(who), 16)
 end
@@ -168,7 +178,8 @@ end
 local function start_task(model: Model, m: Matter, task: string?, out: { Effect })
 	if m.preparing then return end
 	m.preparing = next_gen(model)
-	m.preparation = { gen = m.preparing, revision = m.revision, task = task, stage = "thread" }
+	m.preparation = { gen = m.preparing, revision = m.revision, task = task, workspace = status.task_workspace(m),
+		default_workspace_setting = model.cfg.settings.workspace, stage = "thread" }
 	model.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在打开任务页…"
 	if task then request_thread(model, m, out) end
 end
@@ -188,7 +199,8 @@ local function start_chat(model: Model, out: { Effect })
 	if m.no_agent then model.flash = "这条不交给 AI。按 g 让 AI 分析后再聊"; return end
 	local said = model.command
 	model.command, model.command_cursor, model.talking = "", 0, m.id
-	model.chat_request = { id = m.id, gen = next_gen(model), revision = m.revision, said = said, stage = "thread" }
+	model.chat_request = { id = m.id, gen = next_gen(model), revision = m.revision, said = said,
+		decision_before = decision(m), stage = "thread" }
 	table.insert(m.talk, { me = true, text = said })
 	model.flash = "AI 正在回答…"
 	matter.log(model, "你", "对 AI 说：" .. said)
@@ -199,7 +211,8 @@ end
 local function primary(model: Model, m: Matter, confirmed: boolean, out: { Effect })
 	if status.needs_confirm(m) and not confirmed then
 		local j = m.analysis.judgment
-		model.flash = "这条涉及" .. (if j then j.risk else "高风险动作") .. "，请点击按钮确认后再执行"
+		model.flash = if m.task_workspace_unconfirmed then "旧任务的执行目录无法安全迁移，请核对可见目录并点击确认"
+			else "这条涉及" .. (if j then j.risk else "高风险动作") .. "，请点击按钮确认后再执行"
 		return
 	end
 	local action = status.next_action(m).key
@@ -217,8 +230,14 @@ local function primary(model: Model, m: Matter, confirmed: boolean, out: { Effec
 		if m.task then m.task.new_messages = 0 end
 		emit(out, { type = "open-task", id = m.id })
 	elseif action == "reopen" then
-		if m.task then m.task.phase = "starting" end
-		emit(out, { type = "reopen-task", id = m.id })
+		if m.task_workspace_unconfirmed then
+			m.disposition = nil
+			m.revision += 1
+			record(m, out)
+			model.flash = "请先核对执行目录，再确认开始新任务"
+		else
+			start_task(model, m, if m.analysis.judgment then status.task_text(m) else nil, out)
+		end
 	end
 end
 
@@ -420,7 +439,7 @@ local function advance(model: Model, out: { Effect })
 			chat.stage = "model"
 			emit(out, { type = "converse", id = m.id, gen = chat.gen, revision = chat.revision, matter = m,
 				extras = extras(model, m), said = chat.said, current = {
-					decision = status.kind(m) or "未判断", draft = status.reply_text(m), task = status.task_text(m),
+					decision = decision(m), draft = status.reply_text(m), task = status.task_text(m), workspace = status.task_workspace(m),
 				} })
 		else request_thread(model, m, out) end
 	end
@@ -624,12 +643,17 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		else
 			a.phase, a.error, a.stage, a.judgment, a.through = "done", nil, nil, event.judgment, event.through
 			m.edits = {}
+			m.task_workspace_unconfirmed = nil
+			local j = event.judgment
+			workbench_event(model, m, "analysis", { chat = m.chat, sender = m.name, why_shown = m.via,
+				result = { decision = decision(m), priority = j.pri, summary = j.summary, why = j.why,
+					draft = j.draft, risk = j.risk, task = table.clone(j.task) } }, out, event.run and event.run.cwd)
 			if model.selected == m.id then model.draft_cursor = text.len(status.field_text(m)) end
 			matter.log(model, "AI", m.name .. "：标记为 " .. event.judgment.pri .. "，" .. status.LABELS[event.judgment.kind][1])
 		end
 	elseif ty == "conversed" then
 		local req = model.chat_request
-		if not req or req.gen ~= event.gen or not m then return out, false end
+		if not req or req.id ~= event.id or req.gen ~= event.gen or not m then return out, false end
 		model.chat_request, model.talking = nil, nil
 		m.analysis.session = event.session or m.analysis.session
 		if event.error then table.insert(m.talk, { text = "（失败）" .. event.error }); model.flash = "AI 回答失败"
@@ -637,43 +661,75 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			table.insert(m.talk, { text = event.reply or "" })
 			model.flash = "AI 已回答"
 			local change = event.change or {}
+			local accepted = req.revision == m.revision
 			if req.revision ~= m.revision then model.flash = "消息或任务已变化，本轮回答未覆盖当前内容"
-			elseif change.kind or change.draft or change.task then
+			elseif change.kind or change.draft or change.task or change.workspace ~= nil then
 				local a = m.analysis
 				if not a.judgment then a.phase, a.judgment = "done", status.manual_judgment() end
 				local j = a.judgment :: types.Judgment
 				j.kind = change.kind or j.kind
 				if change.draft then j.draft, m.edits.reply = change.draft, nil end
 				if change.task then j.task.prompt, m.edits.task, j.risk = change.task, nil, change.risk or "" end
+				if change.workspace ~= nil then
+					j.task.workspace, m.edits.workspace, m.task_workspace_unconfirmed = change.workspace, nil, nil
+				end
 				m.revision += 1
 				if model.selected == m.id then model.draft_cursor = text.len(status.field_text(m)) end
 				model.flash = "AI 已更新判断"; reselect(model, nil)
+			end
+			if accepted then
+				workbench_event(model, m, "workbench_chat", { user_said = req.said, decision_before = req.decision_before,
+					result = { reply = event.reply or "", decision = decision(m), draft = status.reply_text(m),
+						task = status.task_text(m), risk = if m.analysis.judgment then m.analysis.judgment.risk else "" } }, out, event.run and event.run.cwd)
 			end
 		end
 	elseif ty == "prepared" and m then
 		local p = m.preparation
 		if not p or p.gen ~= event.gen then return out, false end
 		m.preparing, m.preparation = nil, nil
-		if p.revision ~= m.revision or m.hidden or (p.task and status.stale(m)) then model.flash = "任务或消息已变化，请重新确认后再执行"
+		if p.revision ~= m.revision or p.default_workspace_setting ~= model.cfg.settings.workspace
+			or m.hidden or (p.task and status.stale(m)) then model.flash = "任务、消息或目录已变化，请重新确认后再执行"
 		elseif event.error then model.flash = "执行前分析失败，请重试"; emit(out, { type = "toast", title = model.flash, detail = event.error })
 		else
-			m.task = { phase = "starting", new_messages = 0 }
-			emit(out, { type = "write-task", id = m.id, prompt = event.prompt, title = task_title(m, p.task), task_text = p.task })
+			local body = p.task or "用户想亲自处理这条消息。先简述消息内容和已知情况，然后等用户指示，不要主动执行操作。"
+			local title = task_title(m, p.task)
+			m.task = { phase = "starting", new_messages = 0, revision = p.revision, task_text = body, title = title }
+			m.task_workspace_unconfirmed = nil
+			emit(out, { type = "write-task", id = m.id, prompt = event.prompt, title = title,
+				task_text = body, workspace = p.workspace, default_workspace_setting = p.default_workspace_setting,
+				revision = p.revision, session = m.analysis.session })
 			resolve(model, m, "doing", "已开始任务", out)
 			emit(out, { type = "save-now" })
-			emit(out, { type = "open-task", id = m.id })
 		end
-	elseif ty == "task-missing" and m then start_task(model, m, if m.analysis.judgment then status.task_text(m) else nil, out)
+	elseif ty == "task-written" and m then
+		local t = m.task
+		if not t or t.request_id or t.revision ~= event.revision then return out, false end
+		t.request_id, t.workspace, t.default_workspace = event.request_id, event.workspace, event.default_workspace
+		emit(out, { type = "save-now" })
+		emit(out, { type = "open-task", id = m.id })
+	elseif ty == "task-write-failed" and m then
+		if m.task and m.task.revision == event.revision then m.task.phase = "closed" end
+		model.flash = "任务确认保存失败，未启动任务"
+		emit(out, { type = "toast", title = model.flash, detail = event.error })
 	elseif ty == "tasks" then
 		for _, it in model.items do
-			if it.disposition ~= "doing" then continue end
+			if status.settled(it) or (it.disposition ~= "doing" and not (it.task and it.task.request_id)) then continue end
 			local task = event.tasks[it.id]
 			local phase = if task then task.state else "closed"
 			local raw = if task and type(task.result) == "string" then task.result else nil
 			if not it.task then it.task = { phase = "closed", new_messages = 0 } end
 			local t = it.task :: types.Task
+			-- Historical unversioned attempts are read-only views, never new confirmations.
+			local historical = task and task.version ~= 2 and t.request_id == nil
+			if task and not historical and (task.version ~= 2 or task.matter_id ~= it.id
+				or task.request_id ~= t.request_id or task.revision ~= t.revision) then continue end
 			if phase == t.phase and raw == t.raw then continue end
 			t.phase, t.raw, t.result = phase, raw, raw
+			if task and t.request_id and raw and (phase == "done" or phase == "closed") then
+				emit(out, { type = "workbench-event", event = { type = "task_result", at = model.cfg.now,
+					workspace = t.default_workspace, matter_id = it.id, revision = t.revision, request_id = t.request_id,
+					data = { task = t.task_text, final = raw, execution_workspace = t.workspace, phase = phase } } })
+			end
 			if phase == "done" then
 				local reply = raw and string.match(raw, "<reply>%s*(.-)%s*</reply>")
 				t.result = raw and string.gsub(raw, "%s*<reply>.-</reply>%s*", "\n")

@@ -2,12 +2,12 @@
 local t = require("./t")
 local task = require("../src/core/task")
 
-t.test("only the confirmed task first line selects a workspace", function()
-	t.eq(task.workspace("执行 Workspace：/repo\n审查 MR", "/default"), "/repo")
-	t.eq(task.workspace("只读排查\n执行 Workspace：/untrusted", "/default"), "/default")
-	t.eq(task.workspace(nil, "/default"), "/default")
-	t.errors(function() task.workspace("执行 Workspace：  \n任务", "/default") end, "不能为空")
-	t.errors(function() task.workspace("附加仓库：/old", "/default") end, "重新确认")
+t.test("only an explicit structured directory selects a workspace", function()
+	t.eq(task.workspace("/repo", "/default"), "/repo")
+	t.eq(task.workspace("", "/default"), "/default")
+	for _, value in { "执行 Workspace：/repo\n审查 MR", "只读排查\n执行 Workspace：/untrusted", "/repo\n/other", "relative" } do
+		t.errors(function() task.workspace(value, "/default") end, "绝对路径")
+	end
 end)
 
 t.test("workspace allowlist matches exactly the second table column", function()
@@ -40,7 +40,8 @@ t.test("repeated link or interrupted claim never replays a task", function()
 end)
 
 t.test("old attempt state and pane cannot appear on a new task request", function()
-	local request = { request_id = 2, prompt = "new task", task_text = "确认后的要求" }
+	local request = { version = 2, matter_id = "matter", revision = 3, request_id = 2, prompt = "new task",
+		title = "", task_text = "确认后的要求", workspace = "", default_workspace = "/default" }
 	local old = { request_id = 1, state = "done", result = "old result", pane = 12 }
 	local joined = task.join(request, old)
 	t.eq(joined.state, "starting"); t.eq(joined.result, nil); t.eq(joined.pane, nil)
@@ -49,6 +50,12 @@ t.test("old attempt state and pane cannot appear on a new task request", functio
 	t.eq(current.state, "working"); t.eq(current.pane, 13)
 	t.eq(old.result, "old result")
 	t.eq(task.join(nil, old), nil)
+	t.eq(joined.default_workspace, "/default")
+	t.eq(task.valid_request(request), true)
+	local invalid = table.clone(request); invalid.request_id = math.huge
+	t.eq(task.valid_request(invalid), false)
+	local protected = task.join(request, { request_id = 2, state = "working", workspace = "/injected", revision = 99 })
+	t.eq(protected.workspace, ""); t.eq(protected.revision, 3)
 end)
 
 t.done()

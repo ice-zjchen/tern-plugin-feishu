@@ -35,20 +35,21 @@ end
 
 -- Host only. The counter persists even when a settled task's request is pruned,
 -- so a late callback from its previous pane can never match a new attempt.
-function bridge.start(id: string, prompt: string, title: string, task_text: string?): number
+function bridge.start(id: string, confirmed: any, before_publish: (any) -> ()): any
 	local counter = tern.kv.get("task-sequence") or 0
-	assert(type(counter) == "number" and counter >= 0 and counter % 1 == 0, "任务请求计数损坏")
+	assert(type(counter) == "number" and counter >= 0 and counter < 9007199254740991 and counter % 1 == 0, "任务请求计数损坏")
 	counter += 1
+	local request = {
+		version = 2, matter_id = id, revision = confirmed.revision, request_id = counter,
+		prompt = confirmed.prompt, title = confirmed.title, task_text = confirmed.task_text,
+		workspace = confirmed.workspace, default_workspace = confirmed.default_workspace,
+	}
+	assert(task_rules.valid_request(request), "任务确认请求格式无效")
 	tern.kv.set("task-sequence", counter)
-	tern.kv.set("task-request:" .. id, { request_id = counter, prompt = prompt, title = title, task_text = task_text })
-	return counter
-end
-
-function bridge.restart(id: string): boolean
-	local previous = bridge.request(id)
-	if not previous then return false end
-	bridge.start(id, previous.prompt, previous.title or "", previous.task_text)
-	return true
+	-- A confirmation must be durable before the window can observe this request.
+	before_publish(request)
+	tern.kv.set("task-request:" .. id, request)
+	return request
 end
 
 -- Host only. Window-owned records are cleared when their pane closes or emits

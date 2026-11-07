@@ -3,6 +3,7 @@
 -- never starts work, reads settings, downloads images, or changes the input.
 local types = require("./types")
 local schema = require("../shared/schema")
+local task_rules = require("./task")
 
 type Model = types.Model
 type Matter = types.Matter
@@ -141,7 +142,7 @@ function snapshot.empty(cfg: Config): Model
 	}
 end
 
-local function read_judgment(value: any, path: string, legacy: boolean): types.Judgment?
+local function read_judgment(value: any, path: string, legacy: boolean, old_workspace: boolean): types.Judgment?
 	if value == nil then
 		return nil
 	end
@@ -158,6 +159,7 @@ local function read_judgment(value: any, path: string, legacy: boolean): types.J
 		task = {
 			title = string_value(task.title, path .. ".task.title", fallback),
 			prompt = string_value(task.prompt, path .. ".task.prompt", fallback),
+			workspace = string_value(task.workspace, path .. ".task.workspace", if old_workspace then "" else nil),
 		},
 		manual = boolean_value(j.manual, path .. ".manual", if legacy then false else nil),
 	}
@@ -195,7 +197,7 @@ local function read_thread(value: any, path: string, legacy: boolean): { types.T
 	return if undated then nil else thread
 end
 
-local function read_item(value: any, path: string, legacy: boolean): Matter
+local function read_item(value: any, path: string, legacy: boolean, old_workspace: boolean): Matter
 	local item = object(value, path)
 	local a = if legacy then item else object(item.analysis, path .. ".analysis")
 	local phase = choice(if legacy then item.agent else a.phase, path .. ".analysis.phase",
@@ -232,12 +234,18 @@ local function read_item(value: any, path: string, legacy: boolean): Matter
 			result = optional_string(task.result, path .. ".task.result"),
 			raw = optional_string(task.raw, path .. ".task.raw"),
 			new_messages = count_value(task.new_messages, path .. ".task.new_messages"),
+			request_id = optional_number(task.request_id, path .. ".task.request_id"),
+			revision = optional_number(task.revision, path .. ".task.revision"),
+			workspace = optional_string(task.workspace, path .. ".task.workspace"),
+			default_workspace = optional_string(task.default_workspace, path .. ".task.default_workspace"),
+			task_text = optional_string(task.task_text, path .. ".task.task_text"),
+			title = optional_string(task.title, path .. ".task.title"),
 		}
 	end
 	local interrupted = phase == "running"
 	local analysis_error = optional_string(if legacy then item.agent_error else a.error, path .. ".analysis.error")
 	local fallback = if legacy then "" else nil
-	return {
+	local result: Matter = {
 		id = string_value(item.id, path .. ".id"),
 		revision = count_value(item.revision, path .. ".revision", if legacy then 0 else nil),
 		chat_id = string_value(item.chat_id, path .. ".chat_id", fallback),
@@ -256,7 +264,7 @@ local function read_item(value: any, path: string, legacy: boolean): Matter
 		is_read = optional_boolean(item.is_read, path .. ".is_read"),
 		analysis = {
 			phase = if interrupted then "failed" else phase, gen = 0,
-			judgment = read_judgment(if legacy then item.analysis else a.judgment, path .. ".analysis.judgment", legacy),
+			judgment = read_judgment(if legacy then item.analysis else a.judgment, path .. ".analysis.judgment", legacy, old_workspace),
 			error = if interrupted then ANALYSIS_INTERRUPTED else analysis_error,
 			session = optional_string(a.session, path .. ".analysis.session"),
 			through = optional_string(if legacy then item.analyzed_through else a.through, path .. ".analysis.through"),
@@ -270,11 +278,35 @@ local function read_item(value: any, path: string, legacy: boolean): Matter
 		spoken = optional_string(item.spoken, path .. ".spoken"),
 		reopened = optional_string(item.reopened, path .. ".reopened"),
 		task = parsed_task,
-		edits = { reply = optional_string(edits.reply, path .. ".edits.reply"), task = optional_string(edits.task, path .. ".edits.task") },
+		edits = { reply = optional_string(edits.reply, path .. ".edits.reply"), task = optional_string(edits.task, path .. ".edits.task"),
+			workspace = optional_string(edits.workspace, path .. ".edits.workspace") },
+		task_workspace_unconfirmed = optional_boolean(item.task_workspace_unconfirmed, path .. ".task_workspace_unconfirmed"),
 		talk = talk, thread = read_thread(item.thread, path .. ".thread", legacy),
 		thread_error = optional_string(item.thread_error, path .. ".thread_error"),
 		hidden = false, no_agent = false,
 	}
+	if old_workspace then
+		-- Historical routing is interpreted once, never by execution or model-output consumers.
+		local j = result.analysis.judgment
+		local function migrate(body: string): (string, string, boolean)
+			local first, rest = string.match(body, "^([^\n]*)\n?(.*)$")
+			local workspace = first and string.match(first, "^执行 Workspace：%s*(.-)%s*$")
+			if workspace and workspace ~= "" and task_rules.valid_workspace(workspace) then return rest or "", workspace, false end
+			local unsafe = first ~= nil and (string.match(first, "^执行 Workspace：") ~= nil or string.match(first, "^附加仓库：") ~= nil)
+			return if unsafe then rest or "" else body, "", unsafe
+		end
+		if j then
+			local body, workspace, unsafe = migrate(j.task.prompt)
+			j.task.prompt, j.task.workspace = body, workspace
+			result.task_workspace_unconfirmed = unsafe or nil
+		end
+		if result.edits.task then
+			local body, workspace, unsafe = migrate(result.edits.task)
+			result.edits.task, result.edits.workspace = body, workspace
+			result.task_workspace_unconfirmed = unsafe or nil
+		end
+	end
+	return result
 end
 
 local function read_undo(value: any, legacy: boolean): types.Undo?
@@ -300,14 +332,14 @@ function snapshot.decode(value: any, cfg: Config): Model?
 		return nil
 	end
 	local stored = object(value, "root")
-	if stored.version ~= 1 and stored.version ~= 2 then
+	if stored.version ~= 1 and stored.version ~= 2 and stored.version ~= 3 then
 		error("Unsupported inbox snapshot version: " .. tostring(stored.version), 0)
 	end
 	local legacy = stored.version == 1
 	local model = snapshot.empty(cfg)
 	local seen: { [string]: boolean } = {}
 	for i, raw in array(stored.items, "items") do
-		local item = read_item(raw, "items[" .. tostring(i) .. "]", legacy)
+		local item = read_item(raw, "items[" .. tostring(i) .. "]", legacy, stored.version < 3)
 		if item.id == "" or seen[item.id] then
 			invalid("items[" .. tostring(i) .. "].id", "unique nonempty message id")
 		end
@@ -391,15 +423,16 @@ local function encode_item(item: Matter): any
 			run = copy_data(a.run, "analysis.run"),
 		},
 		disposition = item.disposition, handoff_at = item.handoff_at, spoken = item.spoken, reopened = item.reopened,
-		task = if item.task then { phase = item.task.phase, result = item.task.result, raw = item.task.raw, new_messages = item.task.new_messages } else nil,
-		edits = { reply = item.edits.reply, task = item.edits.task }, talk = copy_data(item.talk, "talk"),
+		task = if item.task then copy_data(item.task, "task") else nil,
+		edits = { reply = item.edits.reply, task = item.edits.task, workspace = item.edits.workspace }, talk = copy_data(item.talk, "talk"),
+		task_workspace_unconfirmed = item.task_workspace_unconfirmed,
 		thread = copy_data(item.thread, "thread"), thread_error = item.thread_error,
 	}
 end
 
 function snapshot.encode(model: Model): any
 	local stored: any = {
-		version = 2, items = {}, images = {}, interrupted_chat = model.talking,
+		version = 3, items = {}, images = {}, interrupted_chat = model.talking,
 		me = model.me, view = model.view, source = model.source, person = model.person, selected = model.selected,
 		page = model.page, mode = model.mode, command = model.command, command_cursor = model.command_cursor,
 		draft_cursor = model.draft_cursor, settings_cursor = model.settings_cursor, field_cursor = model.field_cursor,
