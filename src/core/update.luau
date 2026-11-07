@@ -154,7 +154,7 @@ local function extras(model: Model, except: Matter): any
 				summary = if j then j.summary else text.clip(markup.clean(m.content), 200) })
 		end
 	end
-	return { others = others, agenda = if model.cfg.settings.use_agenda then model.agenda else nil }
+	return { me = model.me, others = others, agenda = if model.cfg.settings.use_agenda then model.agenda else nil }
 end
 
 local function decision(m: Matter): string

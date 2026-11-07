@@ -12,14 +12,20 @@ local vision = require("./vision")
 local stage = require("./stage")
 
 type Matter = types.Matter
-export type Extras = { others: { any }?, agenda: any }
+export type Extras = { me: string?, others: { any }?, agenda: any }
 export type Current = { decision: string, draft: string, task: string, workspace: string }
 type Notice = (string?) -> ()
 
 local ai = {}
 
+-- From the authenticated refresh, never inferred from message text or mentions.
+local function identity(extras: Extras): any
+	return { open_id = extras.me or tern.json.null }
+end
+
 local function context(m: Matter, extras: Extras, thread: { any }): string
 	return tern.json.encode({
+		self = identity(extras),
 		trigger = {
 			message_id = m.latest_id or m.id,
 			chat_id = m.chat_id,
@@ -58,7 +64,7 @@ function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notic
 	if resume then
 		prompt = prompts.render("analysis", "followup", {
 			notes = if #images > 0 then prompts.render("analysis", "note_images_followup") else "",
-			new_messages = tern.json.encode({ new_messages = new_messages, now = os.date("%Y-%m-%d %H:%M") }, true),
+			new_messages = tern.json.encode({ self = identity(extras), new_messages = new_messages, now = os.date("%Y-%m-%d %H:%M") }, true),
 			format = prompts.render("analysis", "format"),
 		})
 	else
@@ -92,7 +98,10 @@ function ai.converse(m: Matter, extras: Extras, current: Current, said: string, 
 		draft = if current.draft ~= "" then current.draft else none,
 		task = if current.task ~= "" then current.task else none,
 		workspace = tern.json.encode(current.workspace),
-		context = if session then "" else prompts.render("chat", "context", { context = context(m, extras, matter.agent_thread(m)) }),
+		context = prompts.render("chat", "context", {
+			context = if session then tern.json.encode({ self = identity(extras) }, true)
+				else context(m, extras, matter.agent_thread(m)),
+		}),
 		format = prompts.render("chat", "format"),
 	})
 	omp.turn({ prompt = prompt, purpose = "chat", resume = session }, notice, function(text, next_session, cost, err, run)
