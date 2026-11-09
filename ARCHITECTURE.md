@@ -121,7 +121,7 @@ scripts/check.sh / tests/    编译、纯模块严格类型检查和行为回归
 
 单一 host 在插件数据目录的 `workbench-events/<序号>.json` 写不可变 v1 记录：`id/type/at/workspace/matter_id/revision`，以及可选的 `request_id/session` 和类型化 `data`。`workspace` 是运行时冻结的业务默认目录，任务实际目录在 `data.execution_workspace`；不包含原始飞书消息或图片。
 
-事件类型为 `analysis`、`workbench_chat`、`task_confirmed`、`task_result`。确认事件必须先持久化再发布启动请求；结果只关联同一请求，旧回调或重复轮询不能产生重复结果。任务轮次结束不是业务成功。事件写入失败显式报错，不静默继续交办。
+事件类型为 `analysis`、`workbench_chat`、`task_confirmed`、`task_result`。确认事件必须先持久化再发布启动请求；结果只关联同一请求，旧回调或重复轮询不能产生重复结果。任务轮次结束不是业务成功。事件写入失败显式报错，不静默继续交办；顶部提示在下一次写入成功后消失，且和 omp 目录回退警告一样不写入快照，重载后不会残留。存储读回的 JSON 数组带只读元表，收据更新逐项复制而不用 `table.clone`。
 
 workflow 的采集器按记录版本、目录、请求和时间范围消费这些事件，不匹配中文任务头、不扫描目标代码仓库。目标 Workspace 的关联任务结论因此可回流；工作台 `/` 纠正完整记录。任务页后续直接用户发言目前仍只通过默认 Workspace 的本地历史采集；Tern transcript 没有稳定消息 ID、时间和截断标记，不宣称已可靠回流目标仓库中的全部后续纠正。
 

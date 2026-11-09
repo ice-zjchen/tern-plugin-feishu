@@ -14,9 +14,13 @@ function input.event(model: any, ev: any): any
 	if ev.ev == "action" and type(ev.act) == "string" then
 		local name = string.match(ev.act, "^history%-(.+)$")
 		if name then return { type = "history", name = name } end
+		if ev.act == "move" then return { type = "move", direction = if ev.value == "-1" then -1 else 1 } end
 		return { type = "action", name = ev.act, value = ev.value }
 	elseif (ev.ev == "select" or ev.ev == "activate") and type(ev.item) == "string" then
-		if model.page == "history" then return { type = "history", name = "select", index = tonumber(ev.item), open = ev.ev == "activate" } end
+		if model.page == "history" then
+			local row = if string.sub(ev.item, 1, #ids.HISTORY_PREFIX) == ids.HISTORY_PREFIX then string.match(ev.item, "%.m(%d+)$") else ev.item
+			return { type = "history", name = "select", index = tonumber(row), open = ev.ev == "activate" }
+		end
 		if string.sub(ev.item, 1, #ids.QUEUE_PREFIX) ~= ids.QUEUE_PREFIX then return nil end
 		return { type = "select", id = string.sub(ev.item, #ids.QUEUE_PREFIX + 1), open = ev.ev == "activate" }
 	elseif ev.ev == "change" and type(ev.id) == "string" then
@@ -58,7 +62,8 @@ function input.key(model: any, key: any): any
 		elseif string.match(k, "^[1-5]$") then return { type = "action", name = "view", value = views.LIST[tonumber(k) :: number].id } end
 		return nil
 	end
-	if key.name == "down" or k == "j" then return { type = "move", direction = 1 }
+	if key.name == "escape" and model.reading then return { type = "action", name = "back" }
+	elseif key.name == "down" or k == "j" then return { type = "move", direction = 1 }
 	elseif key.name == "up" or k == "k" then return { type = "move", direction = -1 }
 	elseif k == "/" then return { type = "focus", mode = "command" }
 	elseif k == "6" or k == "7" then

@@ -1,6 +1,8 @@
 -- The old @me panel, inside the workbench. No queue actions or AI controls here.
 local p = require("./primitives")
 local history = require("../core/history")
+local ids = require("./ids")
+local time = require("../shared/time")
 local ui, t, line = p.ui, p.t, p.line
 local history_ui = {}
 
@@ -9,7 +11,8 @@ local function sender(message)
 	return if type(from) == "table" then tostring(from.name or from.id or "未知发送者") else "未知发送者"
 end
 
-function history_ui.body(model)
+-- `compact` (a phone) lists two-line rows tall enough to tap instead of a table.
+function history_ui.body(model, compact: boolean)
 	local h = model.history or history.empty()
 	local page = history.page(h)
 	local children = {
@@ -23,18 +26,40 @@ function history_ui.body(model)
 		}))
 	end
 	if page then
-		local rows = {}
-		for index, message in page.messages do
-			table.insert(rows, { id = tostring(index), cells = {
-				tostring(message.create_time or ""), sender(message), tostring(message.chat_name or message.chat_id or "未知会话"),
-				if message.deleted then "[消息已撤回]" else tostring(message.content or "[无正文]"),
-			} })
+		local function chat(message): string
+			return tostring(message.chat_name or message.chat_id or "未知会话")
 		end
-		local listing = ui.table({
-			{ id = "time", head = "时间", priority = 2 }, { id = "sender", head = "发送者", priority = 3 },
-			{ id = "chat", head = "会话", priority = 1 }, { id = "content", head = "消息", grow = 1, priority = 4 },
-		}, rows, { selectable = true, selected = tostring(h.selected), empty = "这一页没有匹配消息" })
-		listing.p = listing.p or {}; listing.p.key = "table"
+		local function body(message): string
+			return if message.deleted then "[消息已撤回]" else tostring(message.content or "[无正文]")
+		end
+		local listing
+		if compact then
+			local items = {}
+			for index, message in page.messages do
+				local text = string.gsub(body(message), "%s+", " ")
+				table.insert(items, ui.node("item", {
+					key = "m" .. tostring(index), role = "fl.history.message",
+					label = { text .. "\n", t(sender(message) .. " · " .. chat(message), "muted") },
+					value = { t((time.format(tostring(message.create_time or ""))), "muted") },
+				}))
+			end
+			listing = ui.node("list", {
+				key = "table", role = "fl.history.list", selected = ids.HISTORY_PREFIX .. "m" .. tostring(h.selected),
+				empty = { t("这一页没有匹配消息", "muted") },
+			}, items)
+		else
+			local rows = {}
+			for index, message in page.messages do
+				table.insert(rows, { id = tostring(index), cells = {
+					tostring(message.create_time or ""), sender(message), chat(message), body(message),
+				} })
+			end
+			listing = ui.table({
+				{ id = "time", head = "时间", priority = 2 }, { id = "sender", head = "发送者", priority = 3 },
+				{ id = "chat", head = "会话", priority = 1 }, { id = "content", head = "消息", grow = 1, priority = 4 },
+			}, rows, { selectable = true, selected = tostring(h.selected), empty = "这一页没有匹配消息" })
+			listing.p = listing.p or {}; listing.p.key = "table"
+		end
 		table.insert(children, ui.node("scroll", { key = "messages", max = { h = "18lines" } }, { listing }))
 		local message = history.selected(h)
 		if message then
@@ -54,10 +79,10 @@ function history_ui.body(model)
 	})
 end
 
-function history_ui.dock(model)
+function history_ui.dock(model, compact: boolean)
 	local h = model.history or history.empty()
 	local page = history.page(h)
-	return ui.node("row", { role = "fl.dock", gap = "sm", wrap = true }, {
+	return ui.node("row", { role = if compact then "fl.dock.compact" else "fl.dock", gap = "sm", wrap = true }, {
 		ui.button("刷新", { key = "refresh", keys = { "r" }, actions = { click = "history-refresh" }, disabled = h.loading }),
 		ui.button("上一页", { key = "previous", keys = { "p" }, actions = { click = "history-previous" }, disabled = h.loading or h.index <= 1 }),
 		ui.button("下一页", { key = "next", keys = { "n" }, actions = { click = "history-next" }, disabled = h.loading or not page or (h.index == #h.pages and not page.has_more) }),

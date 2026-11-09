@@ -6,6 +6,7 @@ local status = require("../src/core/status")
 local views = require("../src/core/views")
 local update = require("../src/core/update")
 local snapshot = require("../src/core/snapshot")
+local input = require("../src/ui/input")
 local schema = require("../src/shared/schema")
 
 type Model = types.Model
@@ -177,6 +178,49 @@ t.test("unknown muted-chat preferences hide chat and its analysis context", func
 	matter.apply_rules(s); t.eq(m.hidden, false)
 end)
 
+t.test("refresh reads mute settings only for chats still in question, never blocked or finished ones", function()
+	local s = model(); s.cfg.settings.hide_muted = true; s.cfg.settings.hide_bots = true
+	local open = add(s, "open", "reply"); open.chat_id = "c-open"
+	local bot = add(s, "bot", "reply"); bot.chat_id = "c-bot"; bot.sender_type = "bot"
+	local done = add(s, "done", "reply"); done.chat_id = "c-done"; done.disposition = "archived"
+	local ruled = add(s, "ruled", "reply"); ruled.chat_id = "c-rule"
+	s.cfg.rules["c-rule"] = { name = "Ruled", mode = "hide" }
+	local fetch = effects(action(s, "refresh"), "fetch")[1]
+	t.eq(fetch.items, nil)
+	local out = update.apply(s, { type = "fetched", gen = fetch.gen, sources = {}, cursors = {} })
+	local lookup = effects(out, "chat-settings")
+	t.eq(#lookup, 1); t.eq(#lookup[1].ids, 1); t.eq(lookup[1].ids[1], "c-open")
+	t.eq(#effects(out, "read-status"), 0)
+	out = update.apply(s, { type = "chat-settings", gen = fetch.gen, ids = lookup[1].ids, fresh = {}, found = {},
+		error = "部分群免打扰设置无法读取，已暂时隐藏这些群的消息。" })
+	t.eq(#effects(out, "read-status"), 1)
+	t.eq(open.hidden, true); t.eq(bot.hidden, true); t.eq(ruled.hidden, true); t.eq(done.hidden, false)
+	assert(s.problem and string.find(s.problem, "免打扰", 1, true))
+	-- Unblocking a chat asks only about chats whose answer is now needed and unknown.
+	out = update.apply(s, { type = "setting", setting = "hide_bots", value = false })
+	local after = effects(out, "chat-settings")
+	t.eq(#after, 1); t.eq(after[1].gen, nil)
+	local asked = {}; for _, id in after[1].ids do asked[id] = true end
+	t.eq(asked["c-bot"], true); t.eq(asked["c-done"], nil); t.eq(asked["c-rule"], nil)
+	update.apply(s, { type = "chat-settings", ids = after[1].ids, found = {
+		["c-bot"] = { chat_id = "c-bot", is_muted = false, is_mute_at_all = false } } })
+	t.eq(bot.hidden, false); t.eq(open.hidden, true)
+end)
+
+t.test("an event write failure shows once and clears on the next successful write", function()
+	local s = model()
+	local _, changed = update.apply(s, { type = "event-saved" })
+	t.eq(changed, false)
+	update.apply(s, { type = "event-failed", error = "disk full" })
+	t.eq(s.event_warning, "工作台事件保存失败：disk full")
+	update.apply(s, { type = "event-failed", error = "disk full" })
+	local logged = 0
+	for _, entry in s.log do if entry.text == s.event_warning then logged += 1 end end
+	t.eq(logged, 1)
+	_, changed = update.apply(s, { type = "event-saved" })
+	t.eq(changed, true); t.eq(s.event_warning, nil)
+end)
+
 t.test("AI concurrency slots come from running phases and are returned on failure", function()
 	local s = model(); s.cfg.settings.agent_enabled = true; s.cfg.settings.concurrency = 1
 	local a = add(s, "a", nil); local b = add(s, "b", nil)
@@ -346,6 +390,29 @@ t.test("historical task results stay read-only and ambiguous restarts require re
 	out = action(s, "primary")
 	t.eq(#effects(out, "prepare"), 0); t.eq(m.disposition, nil)
 	t.eq(status.needs_confirm(m), true)
+end)
+
+t.test("phone message page opens on a tap and closes on back, Escape or a new filter", function()
+	local s = model()
+	add(s, "first", "reply"); add(s, "second", "reply")
+	t.eq(s.reading, nil)
+	update.apply(s, { type = "move", direction = 1 })
+	t.eq(s.selected, "second"); t.eq(s.reading, nil)
+	update.apply(s, { type = "select", id = "first" })
+	t.eq(s.selected, "first"); t.eq(s.reading, true)
+	t.eq(input.event(s, { ev = "action", act = "move", value = "1" }).type, "move")
+	update.apply(s, input.event(s, { ev = "action", act = "move", value = "1" }))
+	t.eq(s.selected, "second"); t.eq(s.reading, true)
+	action(s, "back")
+	t.eq(s.reading, nil)
+	t.eq(input.key(s, { name = "escape" }), nil)
+	update.apply(s, { type = "select", id = "first" })
+	t.eq(input.key(s, { name = "escape" }).name, "back")
+	action(s, "view", "later")
+	t.eq(s.reading, nil)
+	update.apply(s, { type = "select", id = "first" })
+	action(s, "source", "dm")
+	t.eq(s.reading, nil)
 end)
 
 t.done()

@@ -135,6 +135,10 @@ execute = function(rt, effect)
 		lark.search({ filters = { "--is-at-me" }, token = effect.token }, function(page, err)
 			dispatch(rt, { type = "history", name = "result", gen = effect.gen, page = page, error = err })
 		end)
+	elseif ty == "chat-settings" then
+		lark.chat_settings(effect.ids, function(found, err)
+			dispatch(rt, { type = "chat-settings", gen = effect.gen, ids = effect.ids, fresh = effect.fresh, found = found, error = err })
+		end)
 	elseif ty == "read-status" then
 		if #effect.ids == 0 then dispatch(rt, { type = "read-status", gen = effect.gen, found = {}, added = effect.added }); return end
 		lark.read_status(effect.ids, function(found, err)
@@ -182,7 +186,9 @@ execute = function(rt, effect)
 		end)
 		dispatch(rt, { type = "task-written", id = effect.id, revision = effect.revision,
 			request_id = request.request_id, workspace = cwd, default_workspace = request.default_workspace })
-	elseif ty == "workbench-event" then workbench_events.append(effect.event)
+	elseif ty == "workbench-event" then
+		workbench_events.append(effect.event)
+		dispatch(rt, { type = "event-saved" })
 	elseif ty == "delete-task" then
 		if bridge.request(effect.id) or bridge.state(effect.id) then
 			bridge.remove(effect.id)
@@ -220,7 +226,9 @@ local function failed_effect(rt, effect, err)
 	elseif ty == "write-task" then
 		dispatch(rt, { type = "task-write-failed", id = effect.id, revision = effect.revision, error = tostring(err) })
 	elseif ty == "workbench-event" then
-		dispatch(rt, { type = "notice", warning = "工作台事件保存失败：" .. tostring(err) })
+		dispatch(rt, { type = "event-failed", error = tostring(err) })
+	elseif ty == "chat-settings" then
+		dispatch(rt, { type = "chat-settings", gen = effect.gen, ids = effect.ids, fresh = effect.fresh, found = {}, error = tostring(err) })
 	else error(err, 0) end
 end
 

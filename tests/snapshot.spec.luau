@@ -236,7 +236,7 @@ t.test("v3 preserves user and navigation state with fresh config and detached va
 	model.cursors = { example = { token = "page-example", since = 50, paged = true, exhausted = false } }
 	model.undo = { kind = "rule", id = item.id, chat_id = item.chat_id, previous = { mode = "manual", name = "Example group" } }
 	model.images = { image_example = { path = "images/example.png" } }
-	model.problem, model.runtime_warning = "Synthetic search error", "Synthetic warning"
+	model.problem, model.runtime_warning, model.event_warning = "Synthetic search error", "Synthetic warning", "Synthetic event failure"
 	local encoded = snapshot.encode(model)
 	local cfg = config()
 	cfg.settings.agent_enabled = false
@@ -275,7 +275,8 @@ t.test("v3 preserves user and navigation state with fresh config and detached va
 	t.eq(loaded.undo.previous.mode, "manual")
 	t.eq(loaded.images.image_example.path, "images/example.png")
 	t.eq(loaded.problem, "Synthetic search error")
-	t.eq(loaded.runtime_warning, "Synthetic warning")
+	-- Transient warnings describe the last run, not the restored one.
+	t.eq(loaded.runtime_warning, nil); t.eq(loaded.event_warning, nil)
 	item.folded[1], item.talk[1].text, model.agenda.events[1].summary = "changed", "changed", "changed"
 	t.eq(encoded.items[1].folded[1], "folded-example")
 	t.eq(encoded.items[1].talk[1].text, "Question")

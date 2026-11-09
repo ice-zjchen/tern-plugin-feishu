@@ -148,6 +148,8 @@ export type Model = {
 	source: string,
 	person: string?,
 	selected: string?,
+	-- A phone-width pane shows the selected message instead of the queue. Not saved.
+	reading: boolean?,
 	history: history.State?,
 	page: string?,
 	mode: string?,
@@ -160,7 +162,10 @@ export type Model = {
 	flash: string?,
 	undo: Undo?,
 	problem: string?,
+	-- Transient, never saved: the omp workspace fallback is reported again on the next turn.
 	runtime_warning: string?,
+	-- The last workbench event write failure; the next successful write clears it. Not saved.
+	event_warning: string?,
 	loading: boolean,
 	loading_more: boolean,
 	last_refresh: number?,

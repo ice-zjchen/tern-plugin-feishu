@@ -59,6 +59,8 @@ end
 
 local function focus(model: Model, mode: string?, out: { Effect })
 	model.mode = mode
+	-- The draft and the command live on the message page; a phone must show it.
+	if mode == "draft" or mode == "command" then model.reading = true end
 	emit(out, { type = "focus", mode = mode, setting = model.settings_cursor })
 end
 
@@ -142,7 +144,7 @@ local function refresh(model: Model, more: boolean, out: { Effect })
 	model.fetch_gen = next_gen(model)
 	if not more then model.last_refresh = model.cfg.now end
 	emit(out, { type = "fetch", gen = model.fetch_gen, more = more, settings = model.cfg.settings,
-		stars = model.cfg.stars, cursors = model.cursors, items = model.items, me = model.me })
+		stars = model.cfg.stars, cursors = model.cursors, me = model.me })
 end
 
 local function extras(model: Model, except: Matter): any
@@ -241,11 +243,22 @@ local function primary(model: Model, m: Matter, confirmed: boolean, out: { Effec
 	end
 end
 
+-- Looks up the mute preferences that now decide visibility but are unknown, after
+-- a rule or setting change; a refresh looks up every relevant chat itself.
+local function lookup_missing_mutes(model: Model, out: { Effect })
+	local missing = {}
+	for _, id in matter.mute_chats(model) do
+		if not (model.chat_settings and model.chat_settings[id]) then table.insert(missing, id) end
+	end
+	if #missing > 0 then emit(out, { type = "chat-settings", ids = missing }) end
+end
+
 local function change_rule(model: Model, chat_id: string, rule: any, out: { Effect })
 	model.cfg.rules[chat_id] = rule
 	emit(out, { type = "rule", chat_id = chat_id, rule = rule })
 	matter.apply_rules(model)
 	reselect(model, 1)
+	lookup_missing_mutes(model, out)
 end
 
 local function setting_changed(model: Model, id: string, value: any, out: { Effect })
@@ -254,6 +267,22 @@ local function setting_changed(model: Model, id: string, value: any, out: { Effe
 	emit(out, { type = "setting", id = id, value = model.cfg.settings[id] })
 	matter.apply_rules(model)
 	reselect(model, 1)
+	lookup_missing_mutes(model, out)
+end
+
+-- The last step of a refresh: read status for what is shown and still open.
+-- `fresh` lists matters an older page added, counted once visibility is final.
+local function read_status(model: Model, gen: number, fresh: { string }, out: { Effect })
+	local added = 0
+	for _, id in fresh do
+		local it = matter.find(model, id)
+		if it and not it.disposition and not it.hidden then added += 1 end
+	end
+	local ids = {}
+	for _, it in model.items do
+		if not it.hidden and not status.settled(it) then for _, id in status.ids(it) do table.insert(ids, id) end end
+	end
+	emit(out, { type = "read-status", gen = gen, ids = ids, added = added })
 end
 
 local function undo(model: Model, out: { Effect })
@@ -285,16 +314,16 @@ local function action(model: Model, event: Event, out: { Effect })
 		if not views.known(value) then return end
 		model.page = nil
 		if model.mode then focus(model, nil, out) end
-		model.view, model.person, model.selected = value, nil, nil
+		model.view, model.person, model.selected, model.reading = value, nil, nil, nil
 		model.command, model.command_cursor, model.flash = "", 0, nil
 		reselect(model, 1)
 	elseif name == "source" then
 		if value ~= "all" and value ~= "mention" and value ~= "dm" then return end
-		model.source, model.person, model.selected = value, nil, nil
+		model.source, model.person, model.selected, model.reading = value, nil, nil, nil
 		reselect(model, 1)
 	elseif name == "person" then
 		model.person = if model.person == value then nil else value
-		model.selected = nil; reselect(model, 1)
+		model.selected, model.reading = nil, nil; reselect(model, 1)
 	elseif name == "refresh" then refresh(model, false, out)
 	elseif name == "load-more" then refresh(model, true, out)
 	elseif name == "settings" then
@@ -316,6 +345,7 @@ local function action(model: Model, event: Event, out: { Effect })
 		local r = model.cfg.rules[value]
 		if r then change_rule(model, value, { name = r.name, mode = if r.mode == "hide" then "manual" else "hide" }, out) end
 	elseif name == "close-thread" then model.dialog = nil
+	elseif name == "back" then model.reading = nil
 	elseif not m then return
 	elseif name == "open-thread" then focus(model, nil, out); model.dialog = m.id
 	elseif name == "primary" or name == "confirm-task" then
@@ -517,7 +547,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		end
 	elseif ty == "action" then action(model, event, out)
 	elseif ty == "select" then
-		if m then select_item(model, m.id, out); if event.open then open_message(model, m, out) end end
+		if m then select_item(model, m.id, out); model.reading = true; if event.open then open_message(model, m, out) end end
 	elseif ty == "move" then
 		local shown = queue(model)
 		if #shown > 0 then select_item(model, shown[math.clamp(index_of(shown, model.selected) + event.direction, 1, #shown)].id, out) end
@@ -551,6 +581,16 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			model.runtime_warning = event.warning
 			if event.warning then matter.log(model, "AI", event.warning) end
 		end
+	elseif ty == "event-failed" then
+		local warning = "工作台事件保存失败：" .. tostring(event.error)
+		if model.event_warning ~= warning then
+			model.event_warning = warning
+			matter.log(model, "AI", warning)
+		end
+	elseif ty == "event-saved" then
+		-- Every write reports success; only one that ends a failure changes anything.
+		if not model.event_warning then return out, false end
+		model.event_warning = nil
 	elseif ty == "fetched" then
 		if event.gen ~= model.fetch_gen then return out, false end
 		if event.error and not event.sources then
@@ -560,20 +600,34 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			model.me, model.problem = event.me or model.me, event.error
 			if event.agenda ~= nil or not model.cfg.settings.use_agenda then model.agenda = event.agenda end
 			model.cursors = event.cursors or model.cursors
-			if event.chat_settings then model.chat_settings = event.chat_settings end
 			matter.merge(model, event.sources or {}, event.decisions or {}, out)
-			local added = 0
+			local fresh = {}
 			if model.loading_more then
 				for _, it in model.items do
-					if not before[it.id] then it.analysis.backlog = true; if not it.disposition and not it.hidden then added += 1 end end
+					if not before[it.id] then it.analysis.backlog = true; table.insert(fresh, it.id) end
 				end
 			end
-			local ids = {}
-			for _, it in model.items do
-				if not it.hidden and not status.settled(it) then for _, id in status.ids(it) do table.insert(ids, id) end end
+			-- Mute preferences are read only for chats still in question, never for
+			-- blocked chats or finished matters.
+			local chats = matter.mute_chats(model)
+			if #chats > 0 then
+				emit(out, { type = "chat-settings", gen = event.gen, ids = chats, fresh = fresh })
+			else
+				read_status(model, event.gen, fresh, out)
 			end
-			emit(out, { type = "read-status", gen = event.gen, ids = ids, added = added })
 		end
+	elseif ty == "chat-settings" then
+		if event.gen and event.gen ~= model.fetch_gen then return out, false end
+		-- Keep what is known for chats still in the queue; a chat that was asked
+		-- about but could not be read loses its old answer and stays hidden.
+		local present, prefs = {}, {}
+		for _, it in model.items do present[it.chat_id] = true end
+		for id, pref in model.chat_settings or {} do if present[id] then prefs[id] = pref end end
+		for _, id in event.ids or {} do prefs[id] = (event.found or {})[id] end
+		model.chat_settings = prefs
+		if event.error then model.problem = (if model.problem then model.problem .. "\n" else "") .. event.error end
+		matter.apply_rules(model)
+		if event.gen then read_status(model, event.gen, event.fresh or {}, out) else reselect(model, nil) end
 	elseif ty == "read-status" then
 		if event.gen ~= model.fetch_gen then return out, false end
 		if event.error then model.problem = (if model.problem then model.problem .. "\n" else "") .. "已读状态：" .. event.error end

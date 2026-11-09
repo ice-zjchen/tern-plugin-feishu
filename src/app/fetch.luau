@@ -26,23 +26,8 @@ function fetch.run(request: any, done: (any) -> ())
 		local stars = {}; for _, star in request.stars do table.insert(stars, star.id) end
 		if #stars > 0 and settings.source_star then add({ "--sender", table.concat(stars, ",") }, false) end
 		local waiting = #sources
-		local function finish()
-			if not settings.hide_muted then done(result); return end
-			local ids, seen = {}, {}
-			local function add_chat(chat_id: string, kind: string)
-				if kind ~= "p2p" and chat_id ~= "" and not seen[chat_id] then seen[chat_id] = true; table.insert(ids, chat_id) end
-			end
-			for _, m in request.items do add_chat(m.chat_id, m.chat_type) end
-			for _, source in result.sources do
-				for _, m in source.messages do add_chat(tostring(m.chat_id or ""), tostring(m.chat_type or "group")) end
-			end
-			lark.chat_settings(ids, function(prefs, err)
-				result.chat_settings = prefs
-				result.error = append_error(result.error, err)
-				done(result)
-			end)
-		end
-		if waiting == 0 then finish(); return end
+		-- Mute preferences are looked up after the merge, only for chats still in question.
+		if waiting == 0 then done(result); return end
 		for _, source in sources do
 			local previous = result.cursors[source.key]
 			local since = if more then previous.since else os.time() - settings.lookback_days * 86400
@@ -60,7 +45,7 @@ function fetch.run(request: any, done: (any) -> ())
 					end
 				end
 				waiting -= 1
-				if waiting == 0 then finish() end
+				if waiting == 0 then done(result) end
 			end)
 		end
 	end

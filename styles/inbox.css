@@ -7,6 +7,20 @@
 	flex-wrap: wrap; gap: 12px; padding: 8px 18px; border-top: 1px solid var(--l3);
 	min-width: 0; max-height: 5em; overflow: auto; font-size: 12px;
 }
+.sf-dock[data-surface='plugin.tern-plugin-feishu.inbox']:empty { display: none; }
+.sf-dock[data-surface='plugin.tern-plugin-feishu.inbox'][data-role='fl.dock.compact'] {
+	padding: 8px 16px; max-height: none; font-size: 14px; column-gap: 12px; row-gap: 8px;
+	.sf-kbd { display: none; }
+	.sf-button { min-height: 44px; min-width: 44px; padding-left: 14px; padding-right: 14px; font-size: 15px; }
+}
+[data-surface='plugin.tern-plugin-feishu.inbox'][data-role='fl.layer.compact'] {
+	font-size: 16px; line-height: 1.5;
+	.sf-ov-body { font-size: 16px; line-height: 1.5; }
+	.sf-kbd { display: none; }
+	.sf-button { min-height: 44px; min-width: 44px; padding-left: 14px; padding-right: 14px; font-size: 15px; }
+	.sf-t-muted { font-size: 14px; }
+	[data-role='fl.msg'], [data-role='fl.msg.hit'] { padding: 12px 14px; }
+}
 [data-surface='plugin.tern-plugin-feishu.inbox'] {
 	--fl-bg: var(--panel);
 	--fl-line: var(--l3);
@@ -19,8 +33,10 @@
 	[data-role='fl.history'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: auto; padding: 16px; }
 
 	/* A nonzero basis keeps long content from taking the viewport's height. */
-	[data-role='fl.layout'], [data-role='fl.layout.stack'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: hidden; align-items: stretch; }
+	[data-role='fl.layout'], [data-role='fl.layout.narrow'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: hidden; align-items: stretch; }
 	[data-role='fl.sidebar'] { flex: 0 0 340px; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--fl-line); }
+	[data-role='fl.layout.narrow'] > [data-role='fl.sidebar'] { flex-basis: 300px; }
+	[data-role='fl.layout.narrow'] > [data-role='fl.detail'] { padding: 20px 16px; }
 	[data-role='fl.sources'] { flex: 0 0 auto; padding: 14px 16px 12px; column-gap: 8px; }
 	[data-role='fl.queue.panel'] { flex: 1 1 1px; min-height: 0; min-width: 0; overflow: hidden; }
 	[data-role='fl.queue'] {
@@ -35,7 +51,7 @@
 	}
 	[data-role='fl.queue.foot'] { flex: 0 0 auto; padding: 10px 16px; border-top: 1px solid var(--fl-line); font-size: 12px; }
 
-	[data-role='fl.detail'] { flex: 1 1 1px; min-width: 0; min-height: 0; overflow: auto; padding: 24px; row-gap: 16px; overscroll-behavior: contain; }
+	[data-role='fl.detail'] { flex: 1 1 1px; min-width: 0; min-height: 0; overflow: hidden auto; padding: 24px; row-gap: 16px; overscroll-behavior: contain; }
 	[data-role='fl.detail'] > * { flex: 0 0 auto; width: 100%; max-width: 600px; min-width: 0; align-self: center; }
 	[data-role='fl.summary'] { row-gap: 8px; }
 	[data-role='fl.summary.meta'] { flex: 1 1 1px; min-width: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -53,7 +69,7 @@
 	[data-role='fl.actions'] > * { max-width: 100%; }
 	[data-role='fl.correction'] { min-width: 0; padding-top: 12px; border-top: 1px solid var(--fl-line); font-size: 13px; }
 	[data-role='fl.correction.row'] { min-width: 0; align-items: center; }
-	[data-role='fl.command'] { flex: 1 1 1px; min-width: 0; padding: 7px 10px; border: 1px solid var(--fl-line); border-radius: 6px; }
+	[data-role='fl.command'] { flex: 1 1 1px; min-width: 0; overflow: hidden; padding: 7px 10px; border: 1px solid var(--fl-line); border-radius: 6px; }
 	[data-role='fl.conversation']:empty { display: none; }
 	[data-role='fl.conversation'] { min-width: 0; }
 	[data-role='fl.talk'] { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -71,8 +87,6 @@
 	[data-role='fl.msg.hit'] { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }
 	[data-role='fl.msg.text'] { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
 	[data-role='fl.image'] { max-width: 100%; }
-	[data-role='fl.layout.stack'] > [data-role='fl.sidebar'] { flex: 1 1 1px; min-width: 0; border-right: 0; border-bottom: 1px solid var(--fl-line); }
-	[data-role='fl.layout.stack'] > [data-role='fl.detail'] { flex: 2 1 1px; padding: 20px 16px; }
 	[data-role='fl.activity.row'] { flex: 1 1 25ch; min-width: 0; }
 	[data-role='fl.activity'] { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	[data-role='fl.shortcuts'] { flex: 0 1 auto; white-space: pre-wrap; }
@@ -87,4 +101,72 @@
 	[data-role='fl.field'], [data-role='fl.field.current'] { padding: 12px 14px; flex: 0 0 auto; }
 	[data-role='fl.field.current'] { background: var(--l1); border-radius: 6px; }
 	[data-role='fl.field.input'] { flex: 1 1 auto; }
+}
+
+/* A phone: the queue or one message on the whole pane, one line of view tabs
+   that scrolls sideways and no key hints. Type follows a mobile scale (16px
+   body, 14px secondary, 13px captions); every control is at least 44px with 8px
+   between neighbours so a thumb lands on one thing. The view's root role lands
+   on the region element itself, hence the compound selector. */
+.sf-main[data-surface='plugin.tern-plugin-feishu.inbox'][data-role='fl.root.compact'] {
+	font-size: 16px; line-height: 1.5;
+	.sf-button { min-height: 44px; min-width: 44px; padding-left: 14px; padding-right: 14px; font-size: 15px; }
+	.gap-xs, .gap-sm { column-gap: 8px; row-gap: 8px; }
+	/* Touch screens have no keys to show. */
+	.sf-kbd { display: none; }
+	.sf-t-muted { font-size: 14px; }
+	.sf-input, .sf-ed { font-size: 16px; }
+	.sf-input { min-height: 44px; padding: 10px 12px; }
+	/* Padding, not min-height: the scroll extent follows content height. */
+	.sf-section-head { padding-top: 12px; padding-bottom: 12px; font-size: 16px; }
+	.sf-switch { min-height: 52px; align-items: center; }
+
+	[data-role='fl.bar.compact'] { padding: 8px 12px 0; }
+	[data-role='fl.tabs.scroll'] { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; column-gap: 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior: contain; }
+	[data-role='fl.tabs.scroll'] > * { flex: 0 0 auto; padding-left: 12px; padding-right: 12px; }
+	[data-role='fl.toolbar'] { padding: 8px 16px 10px; align-items: center; column-gap: 12px; border-bottom: 1px solid var(--fl-line); }
+	[data-role='fl.toolbar'] > * { min-width: 0; }
+	[data-role='fl.toolbar'] [data-role='fl.sources'] { padding: 0; column-gap: 8px; }
+	[data-role='fl.header.actions'] { flex: 0 0 auto; flex-wrap: nowrap; column-gap: 8px; margin-left: auto; font-size: 14px; }
+	[data-role='fl.notice'] { padding: 10px 16px; font-size: 14px; }
+	[data-role='fl.bar.reader'] { padding: 8px 12px; align-items: center; column-gap: 8px; border-bottom: 1px solid var(--fl-line); }
+	[data-role='fl.reader.position'] { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 13px; }
+
+	[data-role='fl.layout.single'] { flex: 1 1 1px; height: 1px; min-height: 0; min-width: 0; overflow: hidden; }
+	[data-role='fl.layout.single'] > [data-role='fl.sidebar'] { flex: 1 1 1px; border-right: 0; }
+	[data-role='fl.layout.single'] > [data-role='fl.detail'] { padding: 16px 16px 32px; row-gap: 20px; }
+	[data-role='fl.queue'] {
+		--sf-row: 76px;
+		.sf-item { padding: 12px 16px; font-size: 16px; }
+		.sf-item > * { line-height: 26px; }
+		.sf-item-value { font-size: 13px; }
+	}
+	[data-role='fl.queue.foot'] { padding: 8px 16px; font-size: 14px; }
+	[data-role='fl.summary'] { row-gap: 10px; }
+	[data-role='fl.summary.title'] { font-size: 20px; line-height: 1.4; }
+	[data-role='fl.summary.meta'] { flex-basis: 100%; font-size: 14px; }
+	[data-role='fl.quote'] { padding: 12px 14px; border-radius: 10px; row-gap: 8px; }
+	[data-role='fl.task'] { padding: 16px; border-radius: 12px; row-gap: 14px; }
+	[data-role='fl.task.title'] { font-size: 17px; }
+	[data-role='fl.draft'] { padding: 12px 14px; line-height: 1.6; }
+	[data-role='fl.actions'] { column-gap: 8px; row-gap: 8px; }
+	[data-role='fl.actions'] > * { flex: 1 1 auto; }
+	[data-role='fl.actions'] > [data-role='fl.primary'] { flex-basis: 100%; min-height: 48px; font-size: 16px; }
+	[data-role='fl.correction'] { font-size: 14px; padding-top: 16px; row-gap: 10px; }
+	[data-role='fl.correction.row'] { column-gap: 8px; }
+	[data-role='fl.command'] { min-height: 44px; padding: 10px 12px; font-size: 16px; }
+	[data-role='fl.msg'], [data-role='fl.msg.hit'] { padding: 12px 14px; }
+	[data-role='fl.settings'] { padding: 20px 16px; row-gap: 24px; }
+	[data-role='fl.settings.column'] { flex-basis: 100%; row-gap: 24px; }
+	[data-role='fl.title'] { font-size: 16px; }
+	[data-role='fl.field'], [data-role='fl.field.current'] { padding: 12px; }
+	[data-role='fl.history'] { padding: 16px; }
+	[data-role='fl.history.list'] {
+		--sf-row: 72px;
+		.sf-item { height: var(--sf-row); align-items: flex-start; padding: 12px 8px; border-radius: 0; border: 0; border-bottom: 1px solid var(--l1); font-size: 16px; min-width: 0; }
+		.sf-item > * { white-space: pre; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 24px; }
+		.sf-item-label { flex: 1 1 auto; }
+		.sf-item-value { flex: 0 0 auto; font-size: 13px; }
+		.sf-item.sel { background: var(--l2); box-shadow: inset 2px 0 0 var(--accent); }
+	}
 }

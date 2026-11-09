@@ -97,7 +97,7 @@ function thread.quote(model: any, item: any): any
 	return ui.node("col", { key = "quote", role = "fl.quote", gap = "xs" }, children)
 end
 
-function thread.dialog(model: any, item: any): any
+function thread.dialog(model: any, item: any, compact: boolean): any
 	local list = messages(item)
 	local children: { any } = {
 		ui.button("关闭", { key = "close", variant = "quiet", keys = { "esc" }, actions = { click = "close-thread" } }),
@@ -106,7 +106,7 @@ function thread.dialog(model: any, item: any): any
 	for i, message in list do
 		table.insert(children, message_node(model, "msg_" .. tostring(i), message, status.is_trigger(item, message.id)))
 	end
-	return ui.col({ ui.node("overlay", {
+	return ui.node("col", { role = if compact then "fl.layer.compact" else nil }, { ui.node("overlay", {
 		key = "thread", head = "原始对话", meta = { t(item.name .. " · " .. item.chat, "muted") }, size = "lg", modal = true,
 		["end"] = "layer.thread.close",
 	}, children) })

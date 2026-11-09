@@ -52,10 +52,13 @@ function events.writer(storage: any): any
 				storage.set(receipt, { workspace = event.workspace, matter_id = event.matter_id, revision = event.revision,
 					task = event.data.task, execution_workspace = event.data.execution_workspace, results = {} })
 			else
-				local next_receipt = table.clone(previous)
-				next_receipt.results = table.clone(previous.results)
-				table.insert(next_receipt.results, event.data.final)
-				storage.set(receipt, next_receipt)
+				-- Stored values may be read-only: Tern returns JSON arrays with a protected
+				-- metatable, which table.clone rejects. Copy the fields instead.
+				local results = {}
+				for _, final in previous.results do table.insert(results, final) end
+				table.insert(results, event.data.final)
+				storage.set(receipt, { workspace = previous.workspace, matter_id = previous.matter_id, revision = previous.revision,
+					task = previous.task, execution_workspace = previous.execution_workspace, results = results })
 			end
 		end
 		return record

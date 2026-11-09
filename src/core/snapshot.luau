@@ -371,7 +371,6 @@ function snapshot.decode(value: any, cfg: Config): Model?
 	model.dialog = optional_string(stored.dialog, "dialog")
 	model.undo = read_undo(stored.undo, legacy)
 	model.problem = optional_string(stored.problem, "problem")
-	model.runtime_warning = optional_string(stored.runtime_warning, "runtime_warning")
 	model.last_refresh = optional_number(stored.last_refresh, "last_refresh")
 	model.backlog_marked = boolean_value(stored.backlog_marked, "backlog_marked", false)
 	model.agenda = copy_data(stored.agenda, "agenda")
@@ -437,7 +436,7 @@ function snapshot.encode(model: Model): any
 		page = model.page, mode = model.mode, command = model.command, command_cursor = model.command_cursor,
 		draft_cursor = model.draft_cursor, settings_cursor = model.settings_cursor, field_cursor = model.field_cursor,
 		dialog = model.dialog, undo = copy_data(model.undo, "undo"), log = copy_data(model.log, "log"),
-		problem = model.problem, runtime_warning = model.runtime_warning, last_refresh = model.last_refresh,
+		problem = model.problem, last_refresh = model.last_refresh,
 		backlog_marked = model.backlog_marked, agenda = copy_data(model.agenda, "agenda"),
 		chat_settings = copy_data(model.chat_settings, "chat_settings"), cursors = copy_data(model.cursors, "cursors"),
 	}

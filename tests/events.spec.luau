@@ -55,6 +55,29 @@ t.test("results require their durable same-workspace same-matter confirmation", 
 	t.eq(writer.append(event("task_result", 7)), nil)
 end)
 
+t.test("a second round result appends to a receipt read back as a protected JSON array", function()
+	local kv: { [string]: any }, files = {}, {}
+	-- Tern's kv returns stored arrays tagged with a protected metatable.
+	local function protect(value: any): any
+		if type(value) ~= "table" then return value end
+		local copy = {}
+		for k, v in value do copy[k] = protect(v) end
+		return if #copy > 0 then setmetatable(copy, { __metatable = "json array" }) else copy
+	end
+	local writer = events.writer({
+		get = function(key) return protect(kv[key]) end,
+		set = function(key, value) kv[key] = value end,
+		exists = function(path) return files[path] ~= nil end,
+		write = function(path, value) files[path] = value end,
+	})
+	writer.append(event("task_confirmed", 3))
+	t.eq(writer.append(event("task_result", 3)).data.final, "Observed a result")
+	local second = event("task_result", 3); second.data.final = "Second round"
+	t.eq(writer.append(second).data.final, "Second round")
+	t.eq(#kv["workbench-event-request:3"].results, 2)
+	t.eq(writer.append(event("task_result", 3)), nil)
+end)
+
 t.test("nonfinite event numbers and missing request ids never write", function()
 	local writer, kv = fixture()
 	for _, field in { "at", "revision", "request_id" } do

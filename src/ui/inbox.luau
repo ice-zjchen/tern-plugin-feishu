@@ -10,53 +10,88 @@ local ui, t, line = p.ui, p.t, p.line
 
 local inbox = {}
 
--- The conversation folds away before any of the three columns gets squeezed.
-local WIDE_COLS = 170
-local WIDE_MEDIUM = 110
+-- Pane widths in cells. The conversation folds away before any of the three
+-- columns gets squeezed; below TWO_PANES (a phone, about 690px) the queue and
+-- the selected message take turns on the whole pane.
+local THREE_PANES = 170
+local TWO_PANES = 80
+local SHORT_HINTS = 110
+
+local function root(compact: boolean, children: { any }): any
+	return ui.node("col", { role = if compact then "fl.root.compact" else "fl.root", gap = "none" }, children)
+end
+
+local function context(model: any, item: any): any
+	local side: { any } = { thread.render(model, item) }
+	local why = detail.why(item)
+	if why then
+		table.insert(side, ui.node("col", { key = "why", role = "fl.context.why", gap = "sm" }, {
+			line({ t("判断理由", "strong") }),
+			line(why, { role = "fl.context.text" }),
+		}))
+	end
+	local record = detail.record(model, item)
+	if record then
+		table.insert(side, record)
+	end
+	return ui.node("col", { key = "context", role = "fl.context", gap = "lg" }, side)
+end
+
+-- Phone width: the queue, or the message it opened with a way back.
+local function single(model: any, facts: any, cx: any): any
+	local dock = layout.dock(model, facts, "compact")
+	local layer = if facts.dialog_item then thread.dialog(model, facts.dialog_item, true) else nil
+	if model.reading and facts.item then
+		local body = ui.node("col", { key = "body", role = "fl.layout.single", gap = "none" }, {
+			detail.render(model, facts, false),
+		})
+		return { main = root(true, { layout.reader(model, facts), body }), dock = dock, layer = layer }
+	end
+	local middle = ui.node("col", { key = "middle", role = "fl.sidebar", gap = "none" }, {
+		queue.render(model, facts, math.max(12, cx.cols - 8)),
+	})
+	local body = ui.node("col", { key = "body", role = "fl.layout.single", gap = "none" }, { middle })
+	return { main = root(true, { layout.header(model, facts, true, queue.sources(model)), body }), dock = dock, layer = layer }
+end
 
 function inbox.render(model: any, facts: any, cx: any): any
+	local compact = cx.cols < TWO_PANES
+	local density = if compact then "compact" elseif cx.cols < SHORT_HINTS then "narrow" else "wide"
 	if model.page == "settings" then
 		return {
-			main = ui.node("col", { role = "fl.root", gap = "none" }, { layout.header(model, facts), settings.render(model) }),
-			dock = layout.dock(model, facts, cx.cols < WIDE_MEDIUM),
+			main = root(compact, {
+				layout.header(model, facts, compact, line({ t("设置", "strong") }, { key = "title" })),
+				settings.render(model),
+			}),
+			dock = layout.dock(model, facts, density),
 		}
 	end
 	if model.page == "history" then
 		return {
-			main = ui.node("col", { role = "fl.root", gap = "none" }, { layout.header(model, facts), history.body(model) }),
-			dock = history.dock(model),
+			main = root(compact, { layout.header(model, facts, compact), history.body(model, compact) }),
+			dock = history.dock(model, compact),
 		}
 	end
-	local wide = cx.cols >= WIDE_COLS
-	local medium = cx.cols >= WIDE_MEDIUM
-	local list_cells = math.max(12, if medium then 44 else cx.cols - 14)
+	if compact then
+		return single(model, facts, cx)
+	end
+	local wide = cx.cols >= THREE_PANES
+	local narrow = density == "narrow"
 	local middle = ui.node("col", { key = "middle", role = "fl.sidebar", gap = "none" }, {
 		queue.sources(model),
-		queue.render(model, facts, list_cells),
+		queue.render(model, facts, if narrow then 36 else 44),
 	})
 	local parts: { any } = { middle, detail.render(model, facts, wide) }
 	if wide and facts.item then
-		local side: { any } = { thread.render(model, facts.item) }
-		local why = detail.why(facts.item)
-		if why then
-			table.insert(side, ui.node("col", { key = "why", role = "fl.context.why", gap = "sm" }, {
-				line({ t("判断理由", "strong") }),
-				line(why, { role = "fl.context.text" }),
-			}))
-		end
-		local record = detail.record(model, facts.item)
-		if record then
-			table.insert(side, record)
-		end
-		table.insert(parts, ui.node("col", { key = "context", role = "fl.context", gap = "lg" }, side))
+		table.insert(parts, context(model, facts.item))
 	end
-	local body = ui.node(if medium then "row" else "col", {
-		key = "body", role = if medium then "fl.layout" else "fl.layout.stack", gap = "none", align = "stretch",
+	local body = ui.node("row", {
+		key = "body", role = if narrow then "fl.layout.narrow" else "fl.layout", gap = "none", align = "stretch",
 	}, parts)
 	return {
-		main = ui.node("col", { role = "fl.root", gap = "none" }, { layout.header(model, facts), body }),
-		dock = layout.dock(model, facts, not medium),
-		layer = if facts.dialog_item then thread.dialog(model, facts.dialog_item) else nil,
+		main = root(false, { layout.header(model, facts, false), body }),
+		dock = layout.dock(model, facts, density),
+		layer = if facts.dialog_item then thread.dialog(model, facts.dialog_item, false) else nil,
 	}
 end
 

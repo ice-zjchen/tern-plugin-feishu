@@ -116,11 +116,14 @@ function lark.search(query: { filters: { string }, since: number?, token: string
 			done(nil, err)
 			return
 		end
-		if type(data) ~= "table" or type(data.messages) ~= "table" then
+		if type(data) ~= "table" or (data.messages ~= nil and type(data.messages) ~= "table") then
 			done(nil, "消息响应格式不符合预期。请升级 lark-cli。")
 			return
 		end
-		for _, message in data.messages do
+		-- tern.json.decode drops null members, so `"messages": null` arrives as a
+		-- missing field. Treat it as an empty page; pagination fields still apply.
+		local messages = data.messages or {}
+		for _, message in messages do
 			if type(message) ~= "table" or type(message.message_id) ~= "string" then
 				done(nil, "消息响应缺少有效的 message_id。请检查 lark-cli 版本。")
 				return
@@ -132,7 +135,7 @@ function lark.search(query: { filters: { string }, since: number?, token: string
 			done(nil, "服务端仍有更多结果，但未返回有效分页游标。")
 			return
 		end
-		done({ messages = data.messages, has_more = more, page_token = token }, nil)
+		done({ messages = messages, has_more = more, page_token = token }, nil)
 	end)
 end
 

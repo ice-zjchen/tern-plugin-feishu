@@ -18,7 +18,7 @@ local function field_row(model: any, field: any): any
 		end
 		control = ui.node("row", { key = "c", justify = "between", gap = "md", wrap = true }, {
 			line(field.label),
-			ui.node("row", { key = "values", gap = "xs" }, buttons),
+			ui.node("row", { key = "values", gap = "xs", wrap = true }, buttons),
 		})
 	else
 		local editing = model.mode == "setting" and current

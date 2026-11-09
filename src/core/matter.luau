@@ -76,38 +76,58 @@ function matter.make(message: any, now: number): Matter
 	return m
 end
 
+-- Whether a matter is hidden by sources, bots, @所有人, chat rules or keywords,
+-- everything except mute preferences. Such a chat needs no further lookups.
+function matter.blocked(m: Matter, cfg: any): boolean
+	local s = cfg.settings
+	local rule = cfg.rules[m.chat_id]
+	local at_all = m.via == "@所有人"
+	local starred = false
+	for _, star in cfg.stars do
+		if star.id == m.sender_id then starred = true end
+	end
+	local wanted = (m.mention and not at_all and s.source_mention)
+		or (at_all and not s.hide_atall)
+		or (m.chat_type == "p2p" and s.source_dm)
+		or (starred and s.source_star)
+	if not wanted or (at_all and s.hide_atall) or (rule ~= nil and rule.mode == "hide") or (m.sender_type == "bot" and s.hide_bots) then
+		return true
+	end
+	local name = string.lower(m.chat)
+	for word in string.gmatch(s.ignore_keywords or "", "[^,，%s]+") do
+		if string.find(name, string.lower(word), 1, true) then return true end
+	end
+	return false
+end
+
+-- Group chats whose mute preference still decides what is shown: some matter in
+-- them is neither blocked nor settled. Blocked or finished chats are never looked up.
+function matter.mute_chats(model: Model): { string }
+	local ids, seen = {}, {}
+	if not model.cfg.settings.hide_muted then return ids end
+	for _, m in model.items do
+		if m.chat_type ~= "p2p" and m.chat_id ~= "" and not seen[m.chat_id]
+			and not status.settled(m) and not matter.blocked(m, model.cfg) then
+			seen[m.chat_id] = true
+			table.insert(ids, m.chat_id)
+		end
+	end
+	return ids
+end
+
 -- Applies sources, bots, mute preferences, keywords and chat rules: `hidden`
 -- removes a matter from every view, `no_agent` keeps it visible but away from AI.
 function matter.apply_rules(model: Model)
 	local cfg = model.cfg
 	local s = cfg.settings
-	local words = {}
-	for word in string.gmatch(s.ignore_keywords or "", "[^,，%s]+") do
-		table.insert(words, string.lower(word))
-	end
-	local stars: { [string]: boolean } = {}
-	for _, star in cfg.stars do
-		stars[star.id] = true
-	end
 	for _, m in model.items do
 		local rule = cfg.rules[m.chat_id]
-		local at_all = m.via == "@所有人"
-		local wanted = (m.mention and not at_all and s.source_mention)
-			or (at_all and not s.hide_atall)
-			or (m.chat_type == "p2p" and s.source_dm)
-			or (stars[m.sender_id] and s.source_star)
-		local hidden = not wanted or (at_all and s.hide_atall) or (rule ~= nil and rule.mode == "hide")
-			or (m.sender_type == "bot" and s.hide_bots)
-		if s.hide_muted and m.chat_type ~= "p2p" then
+		local hidden = matter.blocked(m, cfg)
+		if not hidden and s.hide_muted and m.chat_type ~= "p2p" then
 			local pref = model.chat_settings and model.chat_settings[m.chat_id]
-			-- A chat whose setting could not be read stays hidden rather than slip through.
-			hidden = hidden or not pref or pref.is_muted or (at_all and pref.is_mute_at_all)
-		end
-		if not hidden then
-			local name = string.lower(m.chat)
-			for _, word in words do
-				hidden = hidden or string.find(name, word, 1, true) ~= nil
-			end
+			-- A chat whose setting could not be read stays hidden rather than slip
+			-- through; finished matters are not looked up and keep their place.
+			hidden = if pref then pref.is_muted or (m.via == "@所有人" and pref.is_mute_at_all) else not status.settled(m)
 		end
 		m.hidden = hidden == true
 		m.no_agent = not m.analysis.force and (not s.agent_enabled or (rule ~= nil and rule.mode == "manual"))
