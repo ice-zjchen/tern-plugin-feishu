@@ -20,13 +20,17 @@ local workbench_events = require("../services/events")
 local launch = require("../services/launch")
 local status = require("../core/status")
 local task_rules = require("../core/task")
+local bot = require("./bot")
 
 local runtime = {}
 local active = nil
 local MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 local function config()
-	return { settings = settings.all(), rules = settings.rules(), stars = store.stars(), now = os.time(), home = tern.getenv("HOME") }
+	local owner = tern.kv.get("bot_owner")
+	local profile = settings.get("bot_profile")
+	return { settings = settings.all(), rules = settings.rules(), stars = store.stars(), now = os.time(), home = tern.getenv("HOME"),
+		bot_owner = if type(owner) == "table" and profile ~= "" and owner.profile == profile then owner.open_id else nil }
 end
 
 local function mime(bytes: string): string
@@ -76,6 +80,36 @@ local function sync_timers(rt)
 	if tasked and not rt.timers.tasks then
 		timer(rt, "tasks", 3000, function() poll_tasks(rt); if alive(rt) then sync_timers(rt) end end)
 	elseif not tasked then cancel(rt, "tasks") end
+	-- The profile is applied once you leave its field, not on every keystroke.
+	local editing = rt.model.mode == "setting" and rt.model.settings_cursor == "bot_profile"
+	local profile = if editing and rt.bot then rt.bot.profile elseif editing then "" else settings.get("bot_profile")
+	local before = rt.bot
+	-- Reports may arrive inside this call; deferring them keeps dispatch from re-entering here.
+	rt.bot = bot.sync(rt.bot, profile, function(err)
+		tern.timer(1, function() if alive(rt) then dispatch(rt, { type = "bot-status", error = err }) end end)
+	end)
+	if rt.bot ~= before then
+		-- A new or first bot needs binding unless this profile already knows you.
+		rt.model.bot_code = nil
+		if rt.bot and not config().bot_owner then
+			local listener = rt.bot
+			tern.process.run({ "/usr/bin/uuidgen" }, function(result)
+				if rt.bot ~= listener or settings.get("bot_profile") ~= profile then return end
+				local code = (string.gsub(string.lower(result.stdout or ""), "[%s%-]", ""))
+				if result.status == 0 and #code == 32 and string.match(code, "^%x+$") then
+					dispatch(rt, { type = "bot-code", code = code })
+				else
+					dispatch(rt, { type = "bot-status", error = "无法生成机器人绑定码，未开放绑定。" })
+				end
+			end)
+		end
+	end
+	if rt.bot and not rt.timers.bot then
+		timer(rt, "bot", 2000, function()
+			bot.drain(function(event) dispatch(rt, { type = "bot-event", event = event }) end)
+			if alive(rt) then sync_timers(rt) end
+		end)
+	elseif not rt.bot then cancel(rt, "bot") end
 end
 
 local function load_blob(rt, path)
@@ -101,6 +135,7 @@ poll_tasks = function(rt)
 		end
 	end
 	if changed then dispatch(rt, { type = "tasks", tasks = tasks }) end
+	bridge.prune_auto()
 end
 
 -- Effects a person triggers or needs to see; there is nowhere to show them without a pane.
@@ -175,9 +210,11 @@ execute = function(rt, effect)
 			dispatch(rt, { type = "conversed", id = effect.id, gen = effect.gen, reply = reply, change = change,
 				session = session, cost = cost, error = err, run = run })
 		end)
-	elseif ty == "prepare" then
-		ai.prepare_task(effect.matter, effect.task, function(w) notice(rt, w) end, function(prompt, cost, err)
-			dispatch(rt, { type = "prepared", id = effect.id, gen = effect.gen, prompt = prompt, cost = cost, error = err })
+	elseif ty == "prepare" or ty == "context" then
+		ai.prepare_task(effect.matter, effect.task, function(w) notice(rt, w) end, function(prompt, cost, err, needs)
+			dispatch(rt, { type = if ty == "context" then "context-prepared" else "prepared",
+				id = effect.id, gen = effect.gen, revision = effect.revision,
+				prompt = prompt, cost = cost, error = err, needs = needs })
 		end)
 	elseif ty == "write-task" then
 		assert(effect.default_workspace_setting == settings.get("workspace"), "默认 Workspace 已变化，请重新确认")
@@ -189,6 +226,7 @@ execute = function(rt, effect)
 		local request = bridge.start(effect.id, effect, function(record)
 			workbench_events.confirmed(record, rt.model.cfg.now, effect.session)
 		end)
+		if effect.auto then bridge.auto_open(effect.id, request.request_id) end
 		dispatch(rt, { type = "task-written", id = effect.id, revision = effect.revision,
 			request_id = request.request_id, workspace = cwd, default_workspace = request.default_workspace })
 	elseif ty == "workbench-event" then
@@ -214,6 +252,17 @@ execute = function(rt, effect)
 			end
 		end)
 	elseif ty == "forget" then omp.forget(effect.session)
+	elseif ty == "bot-bind" then
+		tern.kv.set("bot_owner", { profile = settings.get("bot_profile"), open_id = effect.open_id })
+	elseif ty == "bot-fetch" then
+		local profile = settings.get("bot_profile")
+		lark.message(effect.target, function(message, err)
+			if settings.get("bot_profile") ~= profile then return end
+			if message and (message.chat_id ~= effect.chat_id or message.deleted) then
+				message, err = nil, "指令目标已撤回或不在同一会话，未启动分析。"
+			end
+			dispatch(rt, { type = "bot-message", message = message, error = err, instruction = effect.instruction, command = effect.command })
+		end)
 	elseif ty == "continue" then dispatch(rt, { type = "continue" })
 	elseif ty == "wake" then
 		cancel(rt, "wake")
@@ -223,9 +272,11 @@ end
 
 local function failed_effect(rt, effect, err)
 	local ty = effect.type
-	local event_type = ({ fetch = "fetched", ["read-status"] = "read-status", thread = "thread", analyze = "analyzed", converse = "conversed", prepare = "prepared" })[ty]
+	local event_type = ({ fetch = "fetched", ["read-status"] = "read-status", thread = "thread", analyze = "analyzed", converse = "conversed",
+		prepare = "prepared", context = "context-prepared" })[ty]
 	if event_type then
-		dispatch(rt, { type = event_type, id = effect.id, gen = effect.gen, latest = effect.latest, error = tostring(err), found = {}, added = effect.added })
+		dispatch(rt, { type = event_type, id = effect.id, gen = effect.gen, revision = effect.revision,
+			latest = effect.latest, error = tostring(err), found = {}, added = effect.added })
 	elseif ty == "image" then dispatch(rt, { type = "image", key = effect.key, error = tostring(err) })
 	elseif ty == "history-search" then dispatch(rt, { type = "history", name = "result", gen = effect.gen, error = tostring(err) })
 	elseif ty == "write-task" then
@@ -234,6 +285,8 @@ local function failed_effect(rt, effect, err)
 		dispatch(rt, { type = "event-failed", error = tostring(err) })
 	elseif ty == "chat-settings" then
 		dispatch(rt, { type = "chat-settings", gen = effect.gen, ids = effect.ids, fresh = effect.fresh, found = {}, error = tostring(err) })
+	elseif ty == "bot-fetch" then
+		dispatch(rt, { type = "bot-message", error = tostring(err), instruction = effect.instruction })
 	else error(err, 0) end
 end
 
@@ -249,6 +302,7 @@ dispatch = function(rt, event)
 		local next_event = table.remove(rt.events, 1)
 		rt.model.cfg = config()
 		rt.model.cfg.visible = context(rt) ~= nil
+		rt.model.cfg.bot_id = if rt.bot and rt.bot.profile == rt.model.cfg.settings.bot_profile then rt.bot.open_id else nil
 		local effects, changed = update.apply(rt.model, next_event)
 		handled = handled or changed
 		for _, effect in effects do

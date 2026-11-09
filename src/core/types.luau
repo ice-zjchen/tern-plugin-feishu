@@ -66,6 +66,8 @@ export type Task = {
 	default_workspace: string?,
 	task_text: string?,
 	title: string?,
+	-- Started on its own after a bot command; the window opens it without a workbench.
+	auto: boolean?,
 }
 
 export type ThreadMessage = {
@@ -78,6 +80,12 @@ export type ThreadMessage = {
 }
 
 export type Talk = { me: boolean?, text: string }
+
+export type TaskContext = {
+	gen: number, revision: number, task: string,
+	phase: "thread" | "model" | "ready" | "failed",
+	prompt: string?, needs: any, error: string?,
+}
 
 export type Matter = {
 	id: string,
@@ -124,6 +132,14 @@ export type Matter = {
 	loading_thread: boolean?,
 	thread_gen: number?,
 	preparation: any,
+	-- Context assessment belongs to the deep-task card, before confirmation. Transient.
+	context: TaskContext?,
+	-- What you asked for when you @-ed the bot about this message; analysis takes it
+	-- as your own words. With `auto_task`, a deep judgment starts its task by itself.
+	-- `urgent` jumps the queue past settling, backlog, concurrency and pauses. Not saved.
+	instruction: string?,
+	auto_task: boolean?,
+	urgent: boolean?,
 }
 
 export type Undo = { kind: "triage", id: string, previous: Disposition? }
@@ -142,6 +158,9 @@ export type Config = {
 	home: string?,
 	-- A workbench pane is open; without one, work runs only if background is allowed.
 	visible: boolean?,
+	-- Your open_id as the dedicated bot app sees you, once bound; nil disables commands.
+	bot_owner: string?,
+	bot_id: string?,
 }
 
 export type Model = {
@@ -187,6 +206,11 @@ export type Model = {
 	fetch_gen: number?,
 	queue_enabled: boolean?,
 	chat_request: any,
+	-- The binding code and listener error are transient. Accepted command IDs are
+	-- checkpointed to prevent event redelivery from starting a second task.
+	bot_code: string?,
+	bot_problem: string?,
+	bot_seen: { [string]: boolean }?,
 }
 
 return {}

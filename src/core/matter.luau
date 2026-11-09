@@ -18,6 +18,9 @@ local BURST_SECONDS = 10 * 60
 local REPLY_BACK_SECONDS = 30 * 60
 -- A chat that is still moving gets a moment to finish before AI reads it.
 matter.SETTLE_SECONDS = 90
+-- Shown as why a matter is in the queue; also marks it as asked for by you.
+local BOT_VIA = "@机器人"
+matter.BOT_VIA = BOT_VIA
 
 function matter.log(model: Model, who: string, text: string)
 	table.insert(model.log, 1, { t = os.date("%H:%M", model.cfg.now) :: string, who = who, text = text })
@@ -78,7 +81,9 @@ end
 
 -- Whether a matter is hidden by sources, bots, @所有人, chat rules or keywords,
 -- everything except mute preferences. Such a chat needs no further lookups.
+-- Something you asked about through the bot is never filtered away.
 function matter.blocked(m: Matter, cfg: any): boolean
+	if m.via == BOT_VIA then return false end
 	local s = cfg.settings
 	local rule = cfg.rules[m.chat_id]
 	local at_all = m.via == "@所有人"
@@ -123,7 +128,7 @@ function matter.apply_rules(model: Model)
 	for _, m in model.items do
 		local rule = cfg.rules[m.chat_id]
 		local hidden = matter.blocked(m, cfg)
-		if not hidden and s.hide_muted and m.chat_type ~= "p2p" then
+		if not hidden and s.hide_muted and m.chat_type ~= "p2p" and m.via ~= BOT_VIA then
 			local pref = model.chat_settings and model.chat_settings[m.chat_id]
 			-- A chat whose setting could not be read stays hidden rather than slip
 			-- through; finished matters are not looked up and keep their place.

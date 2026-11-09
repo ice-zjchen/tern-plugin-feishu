@@ -78,6 +78,8 @@ local function resolve(model: Model, m: Matter, disposition: types.Disposition?,
 	local at = index_of(queue(model), m.id)
 	model.undo = { kind = "triage", id = m.id, previous = m.disposition }
 	m.disposition, m.reopened = disposition, nil
+	m.auto_task = nil
+	if m.preparation and m.preparation.auto then m.preparing, m.preparation = nil, nil end
 	m.revision += 1
 	if m.task then m.task.new_messages = 0 end
 	record(m, out)
@@ -183,17 +185,61 @@ local function task_title(m: Matter, task: string?): string
 	return "飞书: " .. text.clip(text.flat(what), 24) .. " · " .. text.clip(text.flat(who), 16)
 end
 
-local function start_task(model: Model, m: Matter, task: string?, out: { Effect })
-	if m.preparing then return end
-	m.preparing = next_gen(model)
-	m.preparation = { gen = m.preparing, revision = m.revision, task = task, workspace = status.task_workspace(m),
-		default_workspace_setting = model.cfg.settings.workspace, stage = "thread" }
-	model.flash = if task then "正在判断任务与飞书消息的关联性…" else "正在打开任务页…"
-	if task then request_thread(model, m, out) end
+local function request_context(model: Model, m: Matter, out: { Effect }, retry: boolean?)
+	if not may_run(model) and not m.auto_task then return end
+	if status.kind(m) ~= "deep" or status.stale(m) or status.settled(m) or m.hidden
+		or (m.disposition == "doing" and (not m.task or m.task.phase ~= "closed"))
+		or (model.mode == "draft" and model.selected == m.id) then return end
+	local cached = status.task_context(m)
+	if cached and (not retry or cached.phase ~= "failed") then return end
+	local c: types.TaskContext = { gen = next_gen(model), revision = m.revision, task = status.task_text(m), phase = "thread", needs = nil }
+	m.context = c
+	if m.thread then
+		c.phase = "model"
+		emit(out, { type = "context", id = m.id, gen = c.gen, revision = c.revision, task = c.task, matter = m })
+	else request_thread(model, m, out) end
+end
+
+local function publish_task(model: Model, m: Matter, p: any, prompt: string, out: { Effect })
+	local body = p.task or "用户想亲自处理这条消息。先简述消息内容和已知情况，然后等用户指示，不要主动执行操作。"
+	local title = task_title(m, p.task)
+	m.preparing, m.preparation, m.auto_task = nil, nil, nil
+	m.task = { phase = "starting", new_messages = 0, revision = p.revision, task_text = body, title = title, auto = p.auto or nil }
+	m.task_workspace_unconfirmed = nil
+	emit(out, { type = "write-task", id = m.id, prompt = prompt, title = title,
+		task_text = body, workspace = p.workspace, default_workspace_setting = p.default_workspace_setting,
+		revision = p.revision, session = m.analysis.session, auto = p.auto == true })
+	resolve(model, m, "doing", "已开始任务", out)
+	emit(out, { type = "save-now" })
+end
+
+local function start_task(model: Model, m: Matter, task: string?, out: { Effect }, auto: boolean?)
+	if m.preparing or m.hidden or (task and (status.stale(m) or status.settled(m))) then return end
+	if task then
+		request_context(model, m, out)
+		local cached = status.task_context(m)
+		if not cached or cached.phase ~= "ready" then
+			if not auto then
+				model.flash = if cached and cached.phase == "failed" then "上下文判断失败，请在任务卡片重试" else "任务上下文尚未准备好，请稍后再确认"
+				return
+			end
+		end
+	end
+	local p = { gen = next_gen(model), revision = m.revision, task = task, workspace = status.task_workspace(m),
+		default_workspace_setting = model.cfg.settings.workspace, stage = if task then "context" else "thread", auto = auto == true }
+	local cached = if task then status.task_context(m) else nil
+	if cached and cached.phase == "ready" and cached.prompt then
+		publish_task(model, m, p, cached.prompt, out)
+	else
+		m.preparing, m.preparation = p.gen, p
+		model.flash = if task then "正在准备任务上下文…" else "正在打开任务页…"
+	end
 end
 
 local function start_edit(model: Model, m: Matter, out: { Effect })
 	if not status.can_edit(m) then return end
+	m.auto_task = nil
+	if m.preparation and m.preparation.auto then m.preparing, m.preparation = nil, nil end
 	local a = m.analysis
 	if not a.judgment then a.phase, a.judgment = "done", status.manual_judgment() end
 	if a.judgment and a.judgment.kind == "fyi" then a.judgment.kind = "reply" end
@@ -205,6 +251,8 @@ local function start_chat(model: Model, out: { Effect })
 	local m = current(model)
 	if not m or model.talking or not string.find(model.command, "%S") or not status.can_adjust(m) then return end
 	if m.no_agent then model.flash = "这条不交给 AI。按 g 让 AI 分析后再聊"; return end
+	m.auto_task = nil
+	if m.preparation and m.preparation.auto then m.preparing, m.preparation = nil, nil end
 	local said = model.command
 	model.command, model.command_cursor, model.talking = "", 0, m.id
 	model.chat_request = { id = m.id, gen = next_gen(model), revision = m.revision, said = said,
@@ -234,6 +282,8 @@ local function primary(model: Model, m: Matter, confirmed: boolean, out: { Effec
 		end
 	elseif action == "task" then
 		start_task(model, m, status.task_text(m), out)
+	elseif action == "retry-context" then
+		request_context(model, m, out, true)
 	elseif action == "jump" then
 		if m.task then m.task.new_messages = 0 end
 		emit(out, { type = "open-task", id = m.id })
@@ -320,6 +370,8 @@ local STOPPED = "已手动停止分析，按 r 重新分析。"
 -- matter waits for r: it is never picked up again by the queue on its own.
 local function stop_analysis(model: Model, m: Matter, out: { Effect })
 	local a = m.analysis
+	m.urgent, m.auto_task = nil, nil
+	if m.preparation and m.preparation.auto then m.preparing, m.preparation = nil, nil end
 	if a.phase ~= "running" or a.stopping then return end
 	if a.stage == "model" then
 		a.stopping = true
@@ -330,6 +382,100 @@ local function stop_analysis(model: Model, m: Matter, out: { Effect })
 		model.flash = "已停止分析：" .. m.name
 		matter.log(model, "你", "停止了对 " .. m.name .. " 的分析")
 	end
+end
+
+local function trimmed(value: any): string
+	return (string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1"))
+end
+
+-- One message the dedicated bot received. Only your own @ in a group is a
+-- command; a direct message can only carry the one-time binding code.
+local function bot_event(model: Model, e: any, out: { Effect }): boolean
+	if type(e) ~= "table" or e.type ~= "im.message.receive_v1" or e.sender_type ~= "user"
+		or type(e.message_id) ~= "string" or type(e.sender_id) ~= "string" then return false end
+	local seen = model.bot_seen or {}
+	model.bot_seen = seen
+	if seen[e.message_id] then return false end
+	local content = trimmed(e.content)
+	local owner = model.cfg.bot_owner
+	if e.chat_type == "p2p" then
+		local code = string.match(string.lower(content), "^绑定%s*(%x+)$")
+		if owner or not model.bot_code or code ~= model.bot_code then return false end
+		seen[e.message_id] = true
+		emit(out, { type = "bot-bind", open_id = e.sender_id })
+		model.cfg.bot_owner, model.bot_code = e.sender_id, nil
+		model.flash = "机器人已绑定到你的飞书账号，之后你在群里 @机器人 会立即处理"
+		matter.log(model, "你", model.flash :: string)
+		return true
+	end
+	if e.chat_type ~= "group" or not owner or e.sender_id ~= owner or not model.cfg.bot_id then return false end
+	local mentions_bot = false
+	for _, mention in (if type(e.mentions) == "table" then e.mentions else {}) do
+		if type(mention) == "table" and mention.id == model.cfg.bot_id then mentions_bot = true; break end
+	end
+	if not mentions_bot then return false end
+	seen[e.message_id] = true
+	-- Replying to a message points at it; otherwise the command itself is the message.
+	local target = if type(e.reply_to) == "string" and e.reply_to ~= "" then e.reply_to
+		elseif type(e.root_id) == "string" and e.root_id ~= "" then e.root_id else e.message_id
+	emit(out, { type = "save-now" })
+	emit(out, { type = "bot-fetch", target = target, command = e.message_id, instruction = content, chat_id = e.chat_id })
+	model.flash = "收到机器人指令，正在读取消息…"
+	matter.log(model, "你", "通过机器人要求处理：" .. text.clip(text.flat(content), 40))
+	return true
+end
+
+-- The message a command points at joins the queue (or reopens its matter) and is
+-- analyzed at once with your words; a deep judgment then starts its own task.
+local function bot_message(model: Model, event: Event, out: { Effect })
+	local message = event.message
+	if event.error or type(message) ~= "table" or type(message.message_id) ~= "string" then
+		model.flash = "机器人指令没能读取消息：" .. tostring(event.error)
+		matter.log(model, "AI", model.flash :: string)
+		return
+	end
+	local id = message.message_id
+	local m = matter.find(model, id)
+	if not m then
+		for _, it in model.items do
+			if table.find(it.folded, id) then m = it; break end
+		end
+	end
+	if not m then
+		m = matter.make(message, model.cfg.now)
+		table.insert(model.items, m :: Matter)
+	end
+	local it = m :: Matter
+	local instruction = if type(event.instruction) == "string" and event.instruction ~= "" then event.instruction :: string else nil
+	if it.disposition == "doing" then
+		model.flash = it.name .. "：已有任务在执行，没有重复开始"
+		return
+	end
+	it.revision += 1
+	it.context, it.preparing, it.preparation = nil, nil, nil
+	it.via, it.instruction = matter.BOT_VIA, instruction
+	it.analysis.force = true
+	-- The command targets this exact message, even if it was folded into a burst.
+	it.latest_id, it.content, it.time, it.deleted, it.link = id, tostring(message.content or ""), tostring(message.create_time or ""), message.deleted == true, message.message_app_link
+	it.thread, it.thread_error = nil, nil
+	if it.disposition then
+		it.disposition, it.spoken, it.handoff_at, it.reopened = nil, nil, nil, "你通过机器人要求处理"
+		it.revision += 1
+		record(it, out)
+	end
+	local a = it.analysis
+	if a.phase == "running" then a.reanalyze = true
+	else
+		a.phase, a.error, a.settle_at, a.backlog = "queued", nil, nil, false
+		a.session, a.through = nil, nil
+	end
+	it.urgent, it.auto_task = true, true
+	-- Keep the authenticated command tied to these inputs even during initial analysis.
+	it.preparation = { stage = "analysis", revision = it.revision, workspace = status.task_workspace(it),
+		default_workspace_setting = model.cfg.settings.workspace, auto = true }
+	matter.apply_rules(model)
+	model.flash = "按机器人指令立即分析：" .. it.name
+	matter.log(model, "AI", model.flash :: string)
 end
 
 local function action(model: Model, event: Event, out: { Effect })
@@ -353,6 +499,8 @@ local function action(model: Model, event: Event, out: { Effect })
 	elseif name == "stop-all" then
 		local stopped = 0
 		for _, it in model.items do
+			it.urgent, it.auto_task = nil, nil
+			if it.preparation and it.preparation.auto then it.preparing, it.preparation = nil, nil end
 			if it.analysis.phase == "running" then stop_analysis(model, it, out); stopped += 1 end
 		end
 		if model.cfg.settings.agent_enabled then setting_changed(model, "agent_enabled", false, out) end
@@ -407,6 +555,7 @@ local function action(model: Model, event: Event, out: { Effect })
 		elseif not status.settled(m) then resolve(model, m, "snoozed", "稍后处理", out) end
 	elseif name == "redraft" or name == "retry" then
 		if m.analysis.phase == "failed" then m.analysis.phase, m.analysis.settle_at = "queued", nil end
+	elseif name == "retry-context" then request_context(model, m, out, true)
 	elseif name == "stop" then stop_analysis(model, m, out)
 	elseif name == "edit" then start_edit(model, m, out)
 	elseif name == "open" then open_message(model, m, out)
@@ -461,6 +610,8 @@ local function edit_key(model: Model, key: any, out: { Effect }): boolean
 	if field.text ~= status.field_text(m) then
 		if status.kind(m) == "deep" then m.edits.task = field.text else m.edits.reply = field.text end
 		m.revision += 1
+		m.context, m.auto_task = nil, nil
+		m.preparing, m.preparation = nil, nil
 	end
 	model.draft_cursor = field.cursor
 	return changed
@@ -469,6 +620,11 @@ end
 local function advance(model: Model, out: { Effect })
 	-- Finish pending thread/image prerequisites. No nested callback mutates a matter.
 	for _, m in model.items do
+		if m.context and not status.task_context(m) then
+			m.context, m.auto_task = nil, nil
+			if m.preparation and m.preparation.auto then m.preparing, m.preparation = nil, nil end
+		end
+		if model.selected == m.id and not m.preparing then request_context(model, m, out) end
 		local a = m.analysis
 		if a.phase == "running" and a.stage ~= "model" then
 			if a.reanalyze then
@@ -489,11 +645,29 @@ local function advance(model: Model, out: { Effect })
 				end
 			else request_thread(model, m, out) end
 		end
+		local c = status.task_context(m)
+		if c and c.phase == "thread" and (may_run(model) or m.auto_task) then
+			if m.thread then
+				c.phase = "model"
+				emit(out, { type = "context", id = m.id, gen = c.gen, revision = c.revision, task = c.task, matter = m })
+			else request_thread(model, m, out) end
+		end
 		local p = m.preparation
-		if p and p.stage == "thread" and (not p.task or m.thread) then
+		if p and (p.revision ~= m.revision or p.default_workspace_setting ~= model.cfg.settings.workspace
+			or p.workspace ~= status.task_workspace(m) or m.hidden
+			or (p.task and (status.settled(m) or status.stale(m) or p.task ~= status.task_text(m)))) then
+			m.preparing, m.preparation, m.auto_task = nil, nil, nil
+			model.flash = "任务、消息或目录已变化，请重新确认后再执行"
+		elseif p and p.stage == "context" then
+			if not m.auto_task or (c and c.phase == "failed") then
+				m.preparing, m.preparation, m.auto_task = nil, nil, nil
+			elseif c and c.phase == "ready" and c.prompt then
+				publish_task(model, m, p, c.prompt, out)
+			end
+		elseif p and p.stage == "thread" then
 			p.stage = "model"
 			emit(out, { type = "prepare", id = m.id, gen = p.gen, revision = p.revision, task = p.task, matter = m })
-		elseif p and p.stage == "thread" then request_thread(model, m, out) end
+		end
 	end
 	local chat = model.chat_request
 	if chat and chat.stage == "thread" then
@@ -510,6 +684,22 @@ local function advance(model: Model, out: { Effect })
 	-- Running work is counted from the model, never by increment/decrement callbacks.
 	local active = 0
 	for _, m in model.items do if m.analysis.phase == "running" then active += 1 end end
+	local function begin(chosen: Matter)
+		local a = chosen.analysis
+		a.phase, a.error, a.gen, a.stage = "running", nil, next_gen(model), "thread"
+		chosen.urgent = nil
+		active += 1
+		matter.log(model, "agent", chosen.name .. "：开始分析")
+		emit(out, { type = "save-now" })
+		request_thread(model, chosen, out)
+		-- A cached thread doesn't produce a callback: the next dispatch advances it.
+		emit(out, { type = "continue" })
+	end
+	-- What you asked for through the bot starts now: no settling, backlog,
+	-- concurrency limit, pause or background switch holds it back.
+	for _, m in model.items do
+		if m.urgent and m.analysis.phase == "queued" and not m.hidden and not m.preparing then begin(m) end
+	end
 	while model.queue_enabled and may_run(model) and active < model.cfg.settings.concurrency do
 		local chosen = current(model)
 		local function ready(m: Matter): boolean
@@ -524,14 +714,7 @@ local function advance(model: Model, out: { Effect })
 			end
 		end
 		if not chosen then break end
-		local a = chosen.analysis
-		a.phase, a.error, a.gen, a.stage = "running", nil, next_gen(model), "thread"
-		active += 1
-		matter.log(model, "agent", chosen.name .. "：开始分析")
-		emit(out, { type = "save-now" })
-		request_thread(model, chosen, out)
-		-- A cached thread doesn't produce a callback: the next dispatch advances it.
-		emit(out, { type = "continue" })
+		begin(chosen)
 	end
 	local soonest: number? = nil
 	for _, m in model.items do
@@ -550,6 +733,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 	local out: { Effect } = {}
 	local m = if type(event.id) == "string" then matter.find(model, event.id) else nil
 	local ty = event.type
+	local editing = if model.mode == "draft" then current(model) else nil
 	if ty == "history" or (ty == "action" and event.name == "history") then
 		local h = model.history or history.empty()
 		model.history = h
@@ -559,6 +743,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			event = { type = "history", name = "open" }
 		end
 		for _, effect in history.apply(h, event) do emit(out, effect) end
+		if editing then request_context(model, editing, out) end
 		emit(out, { type = "save" })
 		return out, true
 	end
@@ -725,9 +910,14 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		-- A stop you asked for wins over a pending re-run; a result that finished first is kept.
 		local stopped = a.stopping == true
 		a.stopping = nil
+		local auto = m.auto_task == true
+		m.auto_task = nil
 		if a.reanalyze and not stopped then
 			a.phase, a.stage, a.reanalyze, m.thread = "queued", nil, false, nil
+			m.auto_task = auto or nil
+			if auto then a.session, a.through = nil, nil end
 		elseif event.error then
+			if m.preparation and m.preparation.auto then m.preparation = nil end
 			a.phase, a.error, a.stage, a.reanalyze = "failed", if stopped then STOPPED else event.error, nil, false
 			if a.resumed then a.session = nil end
 			matter.log(model, "AI", m.name .. (if stopped then "：已手动停止分析" else "：分析失败"))
@@ -735,12 +925,20 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			a.phase, a.error, a.stage, a.judgment, a.through = "done", nil, nil, event.judgment, event.through
 			m.edits = {}
 			m.task_workspace_unconfirmed = nil
+			m.context, m.preparing, m.preparation = nil, nil, nil
 			local j = event.judgment
 			workbench_event(model, m, "analysis", { chat = m.chat, sender = m.name, why_shown = m.via,
 				result = { decision = decision(m), priority = j.pri, summary = j.summary, why = j.why,
 					draft = j.draft, risk = j.risk, task = table.clone(j.task) } }, out, event.run and event.run.cwd)
 			if model.selected == m.id then model.draft_cursor = text.len(status.field_text(m)) end
 			matter.log(model, "AI", m.name .. "：标记为 " .. event.judgment.pri .. "，" .. status.LABELS[event.judgment.kind][1])
+			request_context(model, m, out)
+			-- Your authenticated @bot command confirms handoff, not tool permissions.
+			if auto and not stopped and j.kind == "deep" and not m.disposition then
+				m.auto_task = true
+				start_task(model, m, status.task_text(m), out, true)
+				matter.log(model, "AI", m.name .. "：按机器人指令准备任务")
+			end
 		end
 	elseif ty == "conversed" then
 		local req = model.chat_request
@@ -765,6 +963,8 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 					j.task.workspace, m.edits.workspace, m.task_workspace_unconfirmed = change.workspace, nil, nil
 				end
 				m.revision += 1
+				m.context, m.preparing, m.preparation, m.auto_task = nil, nil, nil, nil
+				request_context(model, m, out)
 				if model.selected == m.id then model.draft_cursor = text.len(status.field_text(m)) end
 				model.flash = "AI 已更新判断"; reselect(model, nil)
 			end
@@ -774,30 +974,33 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 						task = status.task_text(m), risk = if m.analysis.judgment then m.analysis.judgment.risk else "" } }, out, event.run and event.run.cwd)
 			end
 		end
+	elseif ty == "context-prepared" and m then
+		local c = status.task_context(m)
+		if not c or c.phase ~= "model" or c.gen ~= event.gen or c.revision ~= event.revision then return out, false end
+		c.needs = event.needs
+		if event.error or type(event.prompt) ~= "string" then
+			c.phase, c.prompt, c.error = "failed", nil, event.error or "未取得有效的任务上下文"
+			model.flash = "上下文判断失败，请在任务卡片重试"
+		else
+			c.phase, c.prompt, c.error = "ready", event.prompt, nil
+		end
 	elseif ty == "prepared" and m then
 		local p = m.preparation
-		if not p or p.gen ~= event.gen then return out, false end
+		if not p or p.stage ~= "model" or p.task ~= nil or p.gen ~= event.gen
+			or (event.revision ~= nil and p.revision ~= event.revision) then return out, false end
 		m.preparing, m.preparation = nil, nil
 		if p.revision ~= m.revision or p.default_workspace_setting ~= model.cfg.settings.workspace
-			or m.hidden or (p.task and status.stale(m)) then model.flash = "任务、消息或目录已变化，请重新确认后再执行"
-		elseif event.error then model.flash = "执行前分析失败，请重试"; emit(out, { type = "toast", title = model.flash, detail = event.error })
-		else
-			local body = p.task or "用户想亲自处理这条消息。先简述消息内容和已知情况，然后等用户指示，不要主动执行操作。"
-			local title = task_title(m, p.task)
-			m.task = { phase = "starting", new_messages = 0, revision = p.revision, task_text = body, title = title }
-			m.task_workspace_unconfirmed = nil
-			emit(out, { type = "write-task", id = m.id, prompt = event.prompt, title = title,
-				task_text = body, workspace = p.workspace, default_workspace_setting = p.default_workspace_setting,
-				revision = p.revision, session = m.analysis.session })
-			resolve(model, m, "doing", "已开始任务", out)
-			emit(out, { type = "save-now" })
-		end
+			or p.workspace ~= status.task_workspace(m) or m.hidden then
+			model.flash = "任务、消息或目录已变化，请重新确认后再执行"
+		elseif event.error then model.flash = "打开任务页失败，请重试"; emit(out, { type = "toast", title = model.flash, detail = event.error })
+		else publish_task(model, m, p, event.prompt, out) end
 	elseif ty == "task-written" and m then
 		local t = m.task
 		if not t or t.request_id or t.revision ~= event.revision then return out, false end
 		t.request_id, t.workspace, t.default_workspace = event.request_id, event.workspace, event.default_workspace
 		emit(out, { type = "save-now" })
-		emit(out, { type = "open-task", id = m.id })
+		-- An automatic task is opened by the window, with or without a workbench showing.
+		if not t.auto then emit(out, { type = "open-task", id = m.id }) end
 	elseif ty == "task-write-failed" and m then
 		if m.task and m.task.revision == event.revision then m.task.phase = "closed" end
 		model.flash = "任务确认保存失败，未启动任务"
@@ -840,9 +1043,18 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		if m.disposition == "handoff" and m.revision == event.revision and type(event.text) == "string" and event.text ~= m.spoken then
 			m.spoken, model.flash = event.text, "检测到可能的回复，请确认：" .. event.text
 		end
+	elseif ty == "bot-event" then
+		if not bot_event(model, event.event, out) then return out, false end
+	elseif ty == "bot-message" then bot_message(model, event, out)
+	elseif ty == "bot-code" then model.bot_code = event.code
+	elseif ty == "bot-status" then
+		if model.bot_problem == event.error then return out, false end
+		model.bot_problem = event.error
+		if event.error then matter.log(model, "AI", "机器人事件监听失败：" .. event.error) end
 	elseif ty == "continue" or ty == "wake" then
 		-- The effect runner woke a queue waiting on cached data or a settle deadline.
 	else return out, false end
+	if editing and (model.mode ~= "draft" or model.selected ~= editing.id) then request_context(model, editing, out) end
 	advance(model, out)
 	emit(out, { type = "save" })
 	return out, true

@@ -1,5 +1,5 @@
--- What the workbench asks AI: judge a matter, talk about it, and decide how much
--- of the chat a confirmed task needs. Prompts come from prompts/; turns from omp.
+-- What the workbench asks AI: judge a matter, talk about it, and prepare how much
+-- chat context a task needs before confirmation. Prompts come from prompts/.
 local tern = require("tern")
 local types = require("../core/types")
 local matter = require("../core/matter")
@@ -35,6 +35,7 @@ local function context(m: Matter, extras: Extras, thread: { any }): string
 			why = m.via,
 			content = markup.clean(m.content),
 		},
+		user_instruction = m.instruction,
 		thread = thread,
 		other_pending_messages = extras.others,
 		today_agenda = extras.agenda or prompts.render("analysis", "no_agenda"),
@@ -63,14 +64,17 @@ function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notic
 	local prompt
 	if resume then
 		prompt = prompts.render("analysis", "followup", {
-			notes = if #images > 0 then prompts.render("analysis", "note_images_followup") else "",
-			new_messages = tern.json.encode({ self = identity(extras), new_messages = new_messages, now = os.date("%Y-%m-%d %H:%M") }, true),
+			notes = (if #images > 0 then prompts.render("analysis", "note_images_followup") else "")
+				.. (if m.instruction then prompts.render("analysis", "note_instruction") else ""),
+			new_messages = tern.json.encode({ self = identity(extras), user_instruction = m.instruction,
+				new_messages = new_messages, now = os.date("%Y-%m-%d %H:%M") }, true),
 			format = prompts.render("analysis", "format"),
 		})
 	else
 		prompt = prompts.render("analysis", "new", {
 			notes = (if #m.folded > 0 and m.chat_type ~= "p2p" then prompts.render("analysis", "note_folded") else "")
-				.. (if #images > 0 then prompts.render("analysis", "note_images_new") else ""),
+				.. (if #images > 0 then prompts.render("analysis", "note_images_new") else "")
+				.. (if m.instruction then prompts.render("analysis", "note_instruction") else ""),
 			context = context(m, extras, thread),
 			format = prompts.render("analysis", "format"),
 		})
@@ -172,11 +176,11 @@ function ai.task_prompt(m: Matter, task: string?, plan: context_plan.Plan, needs
 	})
 end
 
--- Judge the final confirmed task, not a cached analysis that may predate edits.
+-- Judge the current task before confirmation, independently of initial analysis.
 -- A fresh, disposable session cannot inherit unrelated triage context.
-function ai.prepare_task(m: Matter, task: string?, notice: Notice, done: (string?, number, string?) -> ())
+function ai.prepare_task(m: Matter, task: string?, notice: Notice, done: (string?, number, string?, context_plan.Answer?) -> ())
 	if not task then
-		done(ai.task_prompt(m, nil, "message"), 0, nil)
+		done(ai.task_prompt(m, nil, "message"), 0, nil, nil)
 		return
 	end
 	local evidence_array = vision.describe(m, task)
@@ -211,16 +215,15 @@ function ai.prepare_task(m: Matter, task: string?, notice: Notice, done: (string
 		local prompt = prompts.render("context", "turn", { input = tern.json.encode(input, true) })
 		omp.turn({ prompt = prompt, purpose = "relevance", ephemeral = true }, notice, function(_text, _session, cost, err, run)
 			total_cost += cost
-			if err then done_judging(nil, err); return end
 			local answer, parse_error = context_plan.parse(run and run.context_judgment)
-			done_judging(answer, parse_error)
+			done_judging(answer, err or parse_error)
 		end)
 	end
 	local function finish(answer: context_plan.Answer?, err: string?)
-		if not answer then done(nil, total_cost, err or "未取得有效的材料与讨论需求判断"); return end
+		if not answer then done(nil, total_cost, err or "未取得有效的材料与讨论需求判断", nil); return end
 		local blocker = err or context_plan.blocker(answer, evidence_array)
-		if blocker then done(nil, total_cost, blocker); return end
-		done(ai.task_prompt(m, task, answer.plan, answer, evidence_array), total_cost, nil)
+		if blocker then done(nil, total_cost, blocker, answer); return end
+		done(ai.task_prompt(m, task, answer.plan, answer, evidence_array), total_cost, nil, answer)
 	end
 	if context_plan.use_vision(evidence_array) then
 		-- Selected screenshots go straight to the configured vision role: one

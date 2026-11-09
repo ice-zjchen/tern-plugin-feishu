@@ -93,6 +93,22 @@ local function open_task(link, cx)
 end
 tern.route.link(open_task)
 
+-- Tasks a bot command started open here within a couple of seconds, whether or
+-- not a workbench is showing. The launch claim in open_task keeps it once-only.
+local AUTO_OPEN_MS = 2000
+local function open_started(cx)
+	if cx then
+		for id, request_id in bridge.auto_pending() do
+			local current = bridge.task(id)
+			if current and current.request_id == request_id and current.state == "starting" and not current.launched then
+				pcall(open_task, { url = bridge.LINK .. id }, cx)
+			end
+		end
+	end
+	tern.timer(AUTO_OPEN_MS, open_started)
+end
+tern.timer(AUTO_OPEN_MS, open_started)
+
 local function lifecycle(ev, cx)
 	local binding = bridge.binding(ev.pane)
 	if not binding then return end

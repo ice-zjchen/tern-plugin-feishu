@@ -36,6 +36,7 @@ schema.FIELDS = ({
 	{ id = "source_mention", group = "sources", kind = "switch", default = true, label = "@我" },
 	{ id = "source_dm", group = "sources", kind = "switch", default = true, label = "私聊" },
 	{ id = "source_star", group = "sources", kind = "switch", default = true, label = "星标联系人" },
+	{ id = "bot_profile", group = "sources", kind = "text", default = "", label = "@机器人 立即处理", hint = "专用机器人在 lark-cli 中的 profile 名；留空不启用。只处理你本人在群里 @机器人 的指令" },
 
 	{ id = "hide_atall", group = "filters", kind = "switch", default = false, label = "隐藏 @所有人", hint = "星标联系人发的也隐藏；同时 @我 的仍显示" },
 	{ id = "hide_bots", group = "filters", kind = "switch", default = false, label = "隐藏机器人消息", hint = "用户和未知身份不受影响" },

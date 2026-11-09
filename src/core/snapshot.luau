@@ -240,6 +240,7 @@ local function read_item(value: any, path: string, legacy: boolean, old_workspac
 			default_workspace = optional_string(task.default_workspace, path .. ".task.default_workspace"),
 			task_text = optional_string(task.task_text, path .. ".task.task_text"),
 			title = optional_string(task.title, path .. ".task.title"),
+			auto = optional_boolean(task.auto, path .. ".task.auto"),
 		}
 	end
 	local interrupted = phase == "running"
@@ -260,6 +261,7 @@ local function read_item(value: any, path: string, legacy: boolean, old_workspac
 		link = optional_string(item.link, path .. ".link"),
 		mention = boolean_value(item.mention, path .. ".mention", if legacy then false else nil),
 		via = string_value(item.via, path .. ".via", if legacy then "群聊" else nil),
+		instruction = optional_string(item.instruction, path .. ".instruction"),
 		folded = folded, latest_id = optional_string(item.latest_id, path .. ".latest_id"),
 		is_read = optional_boolean(item.is_read, path .. ".is_read"),
 		analysis = {
@@ -372,6 +374,13 @@ function snapshot.decode(value: any, cfg: Config): Model?
 	model.undo = read_undo(stored.undo, legacy)
 	model.problem = optional_string(stored.problem, "problem")
 	model.last_refresh = optional_number(stored.last_refresh, "last_refresh")
+	if stored.bot_seen ~= nil then
+		local commands: { [string]: boolean } = {}
+		for id, handled in object(stored.bot_seen, "bot_seen") do
+			commands[string_value(id, "bot_seen key")] = boolean_value(handled, "bot_seen." .. tostring(id))
+		end
+		model.bot_seen = commands
+	end
 	model.backlog_marked = boolean_value(stored.backlog_marked, "backlog_marked", false)
 	model.agenda = copy_data(stored.agenda, "agenda")
 	if stored.chat_settings ~= nil then
@@ -415,6 +424,7 @@ local function encode_item(item: Matter): any
 		id = item.id, revision = item.revision, chat_id = item.chat_id, chat = item.chat, chat_type = item.chat_type,
 		name = item.name, sender_id = item.sender_id, sender_type = item.sender_type, time = item.time,
 		content = item.content, deleted = item.deleted, link = item.link, mention = item.mention, via = item.via,
+		instruction = item.instruction,
 		folded = table.clone(item.folded), latest_id = item.latest_id, is_read = item.is_read,
 		analysis = {
 			phase = a.phase, judgment = copy_data(a.judgment, "analysis.judgment"), error = a.error, session = a.session,
@@ -437,6 +447,7 @@ function snapshot.encode(model: Model): any
 		draft_cursor = model.draft_cursor, settings_cursor = model.settings_cursor, field_cursor = model.field_cursor,
 		dialog = model.dialog, undo = copy_data(model.undo, "undo"), log = copy_data(model.log, "log"),
 		problem = model.problem, last_refresh = model.last_refresh,
+		bot_seen = copy_data(model.bot_seen, "bot_seen"),
 		backlog_marked = model.backlog_marked, agenda = copy_data(model.agenda, "agenda"),
 		chat_settings = copy_data(model.chat_settings, "chat_settings"), cursors = copy_data(model.cursors, "cursors"),
 	}

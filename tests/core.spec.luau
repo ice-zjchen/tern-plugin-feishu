@@ -44,6 +44,17 @@ local function effects(out: { update.Effect }, kind: string): { any }
 	for _, e in out do if e.type == kind then table.insert(result, e) end end
 	return result
 end
+local function cache(m: Matter, prompt: string?)
+	m.context = { gen = 0, revision = m.revision, task = status.task_text(m), phase = "ready",
+		prompt = prompt or "cached task prompt", needs = { plan = "none",
+			materials = { choice = "not_required" }, discussion = { choice = "not_required" } } }
+end
+local function context_ready(s: Model, req: any, prompt: string?): { update.Effect }
+	local out = update.apply(s, { type = "context-prepared", id = req.id, gen = req.gen, revision = req.revision,
+		prompt = prompt or "cached task prompt", needs = { plan = "none",
+			materials = { choice = "not_required" }, discussion = { choice = "not_required" } } })
+	return out
+end
 
 t.test("views and tab share exclusive pending/doing/later counts", function()
 	local s = model()
@@ -56,6 +67,7 @@ t.test("views and tab share exclusive pending/doing/later counts", function()
 	local c = views.counts(s.items)
 	t.eq(c.pending, 2); t.eq(c.doing, 1); t.eq(c.later, 1); t.eq(c.done, 1)
 	t.eq(views.tab_name(s.items, false, nil), "飞书｜待处理2·处理中1·稍后1")
+	cache(p)
 	t.eq(status.next_action(p).key, "task")
 end)
 
@@ -73,6 +85,27 @@ t.test("with background off and no workbench open, nothing new is fetched or ana
 	s.cfg.visible, s.cfg.settings.background, s.loading = false, true, false
 	s.last_refresh = s.cfg.now - 3600
 	t.eq(#effects(update.apply(s, { type = "tick" }), "fetch"), 1)
+end)
+
+t.test("headless deep contexts respect background pause and resume when the card becomes visible", function()
+	local s = model(); s.loaded = true; s.cfg.settings.background = false
+	local m = add(s, "paused-context", "deep"); m.thread = {}
+	t.eq(#effects(update.apply(s, { type = "init" }), "context"), 0); t.eq(m.context, nil)
+	m.analysis.phase, m.analysis.stage, m.analysis.gen = "running", "model", 7
+	local j = status.manual_judgment(); j.kind, j.manual = "deep", false
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = 7, judgment = j })
+	t.eq(#effects(out, "context"), 0); t.eq(m.context, nil)
+	s.cfg.visible = true
+	out = update.apply(s, { type = "select", id = m.id })
+	t.eq(#effects(out, "context"), 1)
+	local pending = add(s, "paused-thread", "deep")
+	out = update.apply(s, { type = "select", id = pending.id })
+	local thread = effects(out, "thread")[1]
+	s.cfg.visible = false
+	out = update.apply(s, { type = "thread", id = pending.id, gen = thread.gen, latest = pending.id, messages = {} })
+	t.eq(#effects(out, "context"), 0); t.eq((pending.context :: types.TaskContext).phase, "thread")
+	s.cfg.visible = true
+	t.eq(#effects(update.apply(s, { type = "init" }), "context"), 1)
 end)
 
 t.test("a stopped analysis waits for retry and is not requeued by new messages", function()
@@ -98,15 +131,137 @@ t.test("stopping all signals every running model turn and pauses automatic analy
 	t.eq(#effects(out, "stop-analysis"), 2); t.eq(s.cfg.settings.agent_enabled, false)
 end)
 
+t.test("only the bound owner's group @ commands the bot; binding needs the shown code", function()
+	local s = model(); s.bot_code = "4821"
+	s.cfg.bot_id = "ou_bot"
+	local function bot(e: any)
+		e.type = e.type or "im.message.receive_v1"
+		e.sender_type = e.sender_type or "user"
+		if e.mentions == nil then e.mentions = { { id = "ou_bot" } } end
+		return update.apply(s, { type = "bot-event", event = e })
+	end
+	t.eq(#effects(bot({ message_id = "om_p1", sender_id = "ou_other", chat_type = "p2p", content = "绑定 1111" }), "bot-bind"), 0)
+	t.eq(#effects(bot({ message_id = "om_p2", sender_id = "ou_me", chat_type = "p2p", content = " 绑定 4821 " }), "bot-bind"), 1)
+	t.eq(s.bot_code, nil)
+	s.cfg.bot_owner = "ou_me"
+	t.eq(#effects(bot({ message_id = "om_g1", sender_id = "ou_other", chat_type = "group", content = "@bot 处理" }), "bot-fetch"), 0)
+	local fetch = effects(bot({ message_id = "om_g2", sender_id = "ou_me", chat_type = "group", content = "@bot 排查", reply_to = "om_target" }), "bot-fetch")
+	t.eq(#fetch, 1); t.eq(fetch[1].target, "om_target"); t.eq(fetch[1].instruction, "@bot 排查")
+	t.eq(#effects(bot({ message_id = "om_g2", sender_id = "ou_me", chat_type = "group", content = "@bot 排查", reply_to = "om_target" }), "bot-fetch"), 0)
+	local own = effects(bot({ message_id = "om_g3", sender_id = "ou_me", chat_type = "group", content = "@bot 看下这个" }), "bot-fetch")
+	t.eq(own[1].target, "om_g3")
+	t.eq(#effects(bot({ message_id = "om_plain", sender_id = "ou_me", chat_type = "group", content = "普通聊天", mentions = {} }), "bot-fetch"), 0)
+	t.eq(#effects(bot({ message_id = "om_otherbot", sender_id = "ou_me", chat_type = "group", content = "@bot 处理", mentions = { { id = "ou_different_bot" } } }), "bot-fetch"), 0)
+	t.eq(#effects(bot({ message_id = "om_bot_sender", sender_id = "ou_me", sender_type = "bot", chat_type = "group", content = "处理" }), "bot-fetch"), 0)
+	local restored = snapshot.decode(snapshot.encode(s), s.cfg) :: Model
+	t.eq(#effects(update.apply(restored, { type = "bot-event", event = { type = "im.message.receive_v1", sender_type = "user",
+		message_id = "om_g2", sender_id = "ou_me", chat_type = "group", content = "重投", mentions = { { id = "ou_bot" } } } }), "bot-fetch"), 0)
+end)
+
+t.test("a commanded message is analyzed at once despite filters and pauses, and a deep result starts its task", function()
+	local s = model(); s.loaded = true
+	s.cfg.settings.agent_enabled, s.cfg.settings.background, s.cfg.settings.concurrency = false, false, 1
+	s.cfg.rules.chat = { mode = "hide", name = "研发" }
+	local busy = add(s, "busy"); busy.analysis.phase, busy.analysis.stage = "running", "model"
+	local out = update.apply(s, { type = "bot-message", message = message("om_cmd"), instruction = "@bot 排查一下" })
+	local m = matter.find(s, "om_cmd") :: Matter
+	t.eq(m.hidden, false); t.eq(m.analysis.phase, "running"); t.eq(#effects(out, "thread"), 1)
+	m.thread = {}; m.analysis.stage = "model"
+	local j = status.manual_judgment(); j.kind, j.manual, j.task = "deep", false, { title = "排查", prompt = "排查报错", workspace = "" }
+	local assessed = effects(update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j }), "context")[1]
+	t.eq(m.preparing ~= nil, true); t.eq(m.preparation.auto, true)
+	t.eq((m.context :: types.TaskContext).phase, "model"); t.eq(m.disposition, nil)
+	local launched = context_ready(s, assessed, "机器人任务")
+	t.eq(effects(launched, "write-task")[1].prompt, "机器人任务")
+	t.eq(#effects(launched, "prepare"), 0); t.eq(#effects(launched, "context"), 0)
+	t.eq(m.disposition, "doing")
+	local written = update.apply(s, { type = "task-written", id = m.id, revision = (m.task :: types.Task).revision, request_id = 3, workspace = "/w", default_workspace = "/w" })
+	t.eq(#effects(written, "open-task"), 0)
+end)
+
+t.test("a commanded risky deep result starts preparation without a workbench confirmation", function()
+	local s = model(); s.loaded = true
+	update.apply(s, { type = "bot-message", message = message("om_risk"), instruction = "@bot 发布" })
+	local m = matter.find(s, "om_risk") :: Matter
+	m.thread = {}; m.analysis.stage = "model"
+	local j = status.manual_judgment(); j.kind, j.manual, j.risk = "deep", false, "通过发布单"
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j })
+	t.eq(m.preparing ~= nil, true); t.eq(m.preparation.auto, true); t.eq(m.disposition, nil)
+	out = context_ready(s, effects(out, "context")[1])
+	t.eq(effects(out, "write-task")[1].auto, true); t.eq(m.disposition, "doing")
+end)
+
+t.test("stopping a commanded analysis prevents automatic task launch even if the result races the stop", function()
+	local s = model()
+	update.apply(s, { type = "bot-message", message = message("om_stop_auto"), instruction = "排查" })
+	local m = matter.find(s, "om_stop_auto") :: Matter
+	m.analysis.stage, m.thread = "model", {}
+	s.selected = m.id
+	action(s, "stop")
+	local j = status.manual_judgment(); j.kind, j.manual = "deep", false
+	update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j })
+	t.eq(m.preparing, nil); t.eq(m.disposition, nil); t.eq(m.auto_task, nil)
+end)
+
+t.test("stopping or changing a commanded task while context is pending cancels automatic launch", function()
+	local s = model()
+	update.apply(s, { type = "bot-message", message = message("om_context_stop"), instruction = "排查" })
+	local m = matter.find(s, "om_context_stop") :: Matter
+	m.analysis.stage, m.thread = "model", {}
+	local j = status.manual_judgment(); j.kind, j.manual = "deep", false
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j })
+	local req = effects(out, "context")[1]
+	s.selected = m.id
+	action(s, "stop")
+	out = context_ready(s, req)
+	t.eq(#effects(out, "write-task"), 0); t.eq(m.preparing, nil); t.eq(m.auto_task, nil)
+	t.eq(m.disposition, nil); t.eq(status.next_action(m).key, "task")
+	-- A later command may start a new assessment, but a new message cancels its intent.
+	update.apply(s, { type = "bot-message", message = message(m.id), instruction = "重新排查" })
+	m.analysis.stage, m.thread = "model", {}
+	out = update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j })
+	req = effects(out, "context")[1]
+	m.revision += 1
+	update.apply(s, { type = "continue" })
+	out = context_ready(s, req)
+	t.eq(#effects(out, "write-task"), 0); t.eq(m.auto_task, nil); t.eq(m.preparing, nil)
+end)
+
+t.test("a changed default directory cancels a bot's pending automatic launch", function()
+	local s = model(); s.cfg.settings.workspace = "/original"
+	update.apply(s, { type = "bot-message", message = message("om_context_directory"), instruction = "排查" })
+	local m = matter.find(s, "om_context_directory") :: Matter
+	m.analysis.stage, m.thread = "model", {}
+	local j = status.manual_judgment(); j.kind, j.manual = "deep", false
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j })
+	local req = effects(out, "context")[1]
+	s.cfg.settings.workspace = "/changed"
+	out = context_ready(s, req)
+	t.eq(#effects(out, "write-task"), 0); t.eq(m.auto_task, nil); t.eq(m.preparing, nil)
+end)
+
+t.test("a bot command targets the exact folded message and does not inherit an earlier analysis session", function()
+	local s = model()
+	local m = add(s, "om_first", "fyi")
+	m.folded, m.latest_id, m.analysis.session, m.analysis.through = { "om_later" }, "om_later", "old-session", "om_later"
+	m.thread = {}
+	update.apply(s, { type = "bot-message", message = message("om_first", nil, "被指定的原消息"), instruction = "检查这一条" })
+	t.eq(m.latest_id, "om_first"); t.eq(m.content, "被指定的原消息"); t.eq(m.analysis.session, nil); t.eq(m.thread, nil)
+	local restored = snapshot.decode(snapshot.encode(s), s.cfg) :: Model
+	t.eq(restored.items[1].instruction, "检查这一条")
+end)
+
 t.test("risk confirmation cannot be bypassed by a key action", function()
 	local s = model(); local m = add(s, "risk", "deep")
 	local judgment = m.analysis.judgment :: types.Judgment
 	judgment.risk = "通过发布单"
-	t.eq(#effects(action(s, "primary"), "prepare"), 0)
-	t.eq(m.preparing, nil)
-	action(s, "confirm-task")
-	t.eq(m.preparing ~= nil, true)
-	t.eq(status.next_action(m).key, "none")
+	cache(m)
+	t.eq(#effects(action(s, "primary"), "write-task"), 0)
+	t.eq(m.preparing, nil); t.eq(m.disposition, nil)
+	local out = action(s, "confirm-task")
+	t.eq(#effects(out, "write-task"), 1)
+	t.eq(#effects(out, "prepare"), 0); t.eq(#effects(out, "context"), 0)
+	t.eq(m.disposition, "doing"); t.eq(status.next_action(m).key, "jump")
 end)
 
 t.test("new judgment pending prevents copy, edit and task start", function()
@@ -119,24 +274,114 @@ t.test("new judgment pending prevents copy, edit and task start", function()
 	t.eq(#effects(action(s, "primary"), "prepare"), 0)
 end)
 
-t.test("edited task while preparing invalidates launch", function()
+t.test("task edits discard context while typing and reassess only when editing ends", function()
 	local s = model(); local m = add(s, "task", "deep"); m.thread = {}
-	local prepared = effects(action(s, "primary"), "prepare")[1]
-	t.eq(prepared.task, "分析仓库")
+	local pending = effects(update.apply(s, { type = "select", id = m.id }), "context")[1]
+	t.eq(pending.task, "分析仓库")
 	update.apply(s, { type = "focus", mode = "draft" })
-	update.apply(s, { type = "field-key", key = { name = "paste", text = "，只读" } })
-	local out = update.apply(s, { type = "prepared", id = m.id, gen = prepared.gen, prompt = "old prompt" })
-	t.eq(#effects(out, "write-task"), 0)
-	t.eq(m.disposition, nil); t.eq(m.preparing, nil)
+	local typed = update.apply(s, { type = "field-key", key = { name = "paste", text = "，只读" } })
+	t.eq(m.context, nil); t.eq(#effects(typed, "context"), 0)
+	typed = update.apply(s, { type = "field-key", key = { name = "paste", text = "，不要修改" } })
+	t.eq(#effects(typed, "context"), 0)
+	t.eq(#effects(context_ready(s, pending, "old prompt"), "write-task"), 0)
+	local out = update.apply(s, { type = "field-key", key = { name = "escape" } })
+	local fresh = effects(out, "context"); t.eq(#fresh, 1)
+	t.eq(fresh[1].task, status.task_text(m)); t.eq(fresh[1].revision, m.revision)
+	context_ready(s, fresh[1], "edited prompt")
+	out = action(s, "primary")
+	t.eq(effects(out, "write-task")[1].prompt, "edited prompt")
+	t.eq(#effects(out, "prepare"), 0); t.eq(#effects(out, "context"), 0)
 end)
 
-t.test("prepare callback from an older attempt cannot open a task", function()
+t.test("pending confirmation cannot launch and context callbacks must match generation revision and task", function()
 	local s = model(); local m = add(s, "task", "deep"); m.thread = {}
-	local req = effects(action(s, "primary"), "prepare")[1]
-	local stale = update.apply(s, { type = "prepared", id = m.id, gen = req.gen + 1, prompt = "stale" })
-	t.eq(#effects(stale, "write-task"), 0)
-	local out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "confirmed" })
-	t.eq(#effects(out, "write-task"), 1); t.eq(m.disposition, "doing")
+	(m.analysis.judgment :: types.Judgment).risk = "发布"
+	local req = effects(update.apply(s, { type = "select", id = m.id }), "context")[1]
+	local out = action(s, "confirm-task")
+	t.eq(#effects(out, "write-task"), 0); t.eq(#effects(out, "context"), 0); t.eq(#effects(out, "prepare"), 0)
+	t.eq(status.next_action(m).key, "none")
+	out = update.apply(s, { type = "context-prepared", id = m.id, gen = req.gen + 1, revision = req.revision, prompt = "stale" })
+	t.eq((m.context :: types.TaskContext).phase, "model"); t.eq(#effects(out, "write-task"), 0)
+	out = update.apply(s, { type = "context-prepared", id = m.id, gen = req.gen, revision = req.revision + 1, prompt = "stale" })
+	t.eq((m.context :: types.TaskContext).phase, "model"); t.eq(#effects(out, "write-task"), 0)
+	m.edits.task = "changed without a matching cached task"
+	context_ready(s, req)
+	t.eq(status.task_context(m), nil)
+	m.edits.task = nil
+	out = context_ready(s, req, "confirmed")
+	t.eq(#effects(out, "write-task"), 0); t.eq(status.next_action(m).key, "task")
+	out = action(s, "confirm-task")
+	t.eq(effects(out, "write-task")[1].prompt, "confirmed"); t.eq(m.disposition, "doing")
+end)
+
+t.test("failed context remains failed until an explicit retry and retains its diagnostic needs", function()
+	local s = model(); local m = add(s, "context-error", "deep"); m.thread = {}
+	local req = effects(update.apply(s, { type = "select", id = m.id }), "context")[1]
+	local needs = { plan = "unknown", materials = { choice = "unknown" }, discussion = { choice = "not_required" } }
+	update.apply(s, { type = "context-prepared", id = m.id, gen = req.gen, revision = req.revision,
+		error = "材料不足", needs = needs })
+	local c = m.context :: types.TaskContext
+	t.eq(c.phase, "failed"); t.eq(c.error, "材料不足"); t.eq(c.needs, needs)
+	t.eq(status.next_action(m).key, "retry-context")
+	t.eq(#effects(update.apply(s, { type = "tick" }), "context"), 0)
+	t.eq(#effects(update.apply(s, { type = "select", id = m.id }), "context"), 0)
+	local retried = effects(action(s, "retry-context"), "context"); t.eq(#retried, 1)
+	t.eq(retried[1].gen ~= req.gen, true)
+	t.eq(#effects(action(s, "retry-context"), "context"), 0)
+	context_ready(s, req, "old success")
+	t.eq((m.context :: types.TaskContext).phase, "model")
+	context_ready(s, retried[1], "recovered")
+	t.eq(status.next_action(m).key, "task")
+end)
+
+t.test("restored deep contexts are transient and assessed lazily for only the selected card", function()
+	local s = model(); s.loaded = true
+	local one = add(s, "restored-one", "deep"); local two = add(s, "restored-two", "deep")
+	cache(one); cache(two)
+	local restored = snapshot.decode(snapshot.encode(s), s.cfg) :: Model
+	local first, second = restored.items[1], restored.items[2]
+	t.eq(first.context, nil); t.eq(second.context, nil)
+	first.thread, second.thread = {}, {}
+	local out = update.apply(restored, { type = "init" })
+	t.eq(#effects(out, "context"), 1); t.eq(effects(out, "context")[1].id, first.id)
+	t.eq(second.context, nil)
+	out = update.apply(restored, { type = "select", id = second.id })
+	t.eq(#effects(out, "context"), 1); t.eq(effects(out, "context")[1].id, second.id)
+end)
+
+t.test("a fresh unselected deep result waits for thread prerequisites then assesses once", function()
+	local s = model(); add(s, "selected-reply", "reply")
+	local m = add(s, "fresh-deep", nil)
+	m.analysis.phase, m.analysis.stage, m.analysis.gen = "running", "model", 10
+	local j = status.manual_judgment(); j.kind, j.manual, j.task.prompt = "deep", false, "检查材料"
+	local out = update.apply(s, { type = "analyzed", id = m.id, gen = 10, judgment = j })
+	t.eq(#effects(out, "context"), 0); t.eq((m.context :: types.TaskContext).phase, "thread")
+	local thread = effects(out, "thread")[1]
+	out = update.apply(s, { type = "thread", id = m.id, gen = thread.gen, latest = m.id, messages = {} })
+	local req = effects(out, "context")[1]
+	t.eq(req.task, "检查材料"); t.eq(req.revision, m.revision)
+	t.eq(#effects(update.apply(s, { type = "continue" }), "context"), 0)
+	context_ready(s, req)
+	t.eq(status.next_action(m).key, "task"); t.eq(m.disposition, nil)
+end)
+
+t.test("leaving a task editor by selecting another card assesses the edited task once", function()
+	local s = model(); local m = add(s, "edited-card", "deep"); m.thread = {}
+	local other = add(s, "other-card", "reply")
+	update.apply(s, { type = "focus", mode = "draft" })
+	update.apply(s, { type = "field-key", key = { name = "paste", text = "，只读" } })
+	local out = update.apply(s, { type = "select", id = other.id })
+	local req = effects(out, "context"); t.eq(#req, 1); t.eq(req[1].id, m.id)
+	t.eq(s.mode, nil); t.eq(req[1].task, status.task_text(m))
+	context_ready(s, req[1])
+	out = update.apply(s, { type = "select", id = m.id })
+	t.eq(#effects(out, "context"), 0); t.eq(status.next_action(m).key, "task")
+end)
+
+t.test("cached confirmation still refuses a hidden matter", function()
+	local s = model(); local m = add(s, "hidden-ready", "deep")
+	cache(m); m.hidden = true
+	t.eq(#effects(action(s, "primary"), "write-task"), 0); t.eq(m.disposition, nil)
 end)
 
 t.test("manual task opens without starting analysis or requiring history", function()
@@ -144,7 +389,10 @@ t.test("manual task opens without starting analysis or requiring history", funct
 	local out = action(s, "open-task")
 	t.eq(#effects(out, "thread"), 0)
 	t.eq(#effects(out, "analyze"), 0)
+	t.eq(#effects(out, "context"), 0)
 	local req = effects(out, "prepare")[1]; t.eq(req.task, nil)
+	out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen + 1, revision = req.revision, prompt = "stale" })
+	t.eq(#effects(out, "write-task"), 0); t.eq(m.preparing, req.gen)
 	update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "wait for user" })
 	t.eq(m.disposition, "doing")
 end)
@@ -334,7 +582,7 @@ t.test("snapshot restoration normalizes repeated references without losing messa
 	t.eq(ids[1], "main"); t.eq(ids[2], "first"); t.eq(ids[3], "second")
 end)
 
-t.test("workspace-only corrections are visible state and invalidate preparation", function()
+t.test("workspace-only corrections invalidate context and stale callbacks cannot overwrite the new plan", function()
 	local s = model(); local m = add(s, "workspace", "deep"); m.thread = {}
 	s.command = "改在 /target 执行"
 	local chat = effects(action(s, "run-command"), "converse")[1]
@@ -343,22 +591,37 @@ t.test("workspace-only corrections are visible state and invalidate preparation"
 	local correction = effects(out, "workbench-event")[1].event
 	t.eq(correction.type, "workbench_chat"); t.eq(correction.data.user_said, "改在 /target 执行")
 	t.eq(correction.data.content, nil)
-	local req = effects(action(s, "primary"), "prepare")[1]
-	t.eq(m.preparation.workspace, "/target")
+	local req = effects(out, "context")[1]
 	s.command = "改回默认目录"
 	chat = effects(action(s, "run-command"), "converse")[1]
-	update.apply(s, { type = "conversed", id = m.id, gen = chat.gen, reply = "已改", change = { workspace = "" } })
+	out = update.apply(s, { type = "conversed", id = m.id, gen = chat.gen, reply = "已改", change = { workspace = "" } })
+	local fresh = effects(out, "context")[1]
 	t.eq(status.task_workspace(m), "")
-	out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "outdated" })
-	t.eq(#effects(out, "write-task"), 0)
+	out = context_ready(s, req, "outdated")
+	t.eq(#effects(out, "write-task"), 0); t.eq((m.context :: types.TaskContext).gen, fresh.gen)
+	context_ready(s, fresh, "new workspace")
+	out = action(s, "primary")
+	t.eq(effects(out, "write-task")[1].workspace, "")
+end)
+
+t.test("an accepted task correction precomputes even after selecting a different card", function()
+	local s = model(); local m = add(s, "changed-away", "deep"); m.thread = {}
+	local other = add(s, "visible-reply", "reply")
+	s.command = "只读检查"
+	local req = effects(action(s, "run-command"), "converse")[1]
+	update.apply(s, { type = "select", id = other.id })
+	local out = update.apply(s, { type = "conversed", id = m.id, gen = req.gen,
+		reply = "已修改", change = { task = "只读检查", risk = "" } })
+	local fresh = effects(out, "context"); t.eq(#fresh, 1); t.eq(fresh[1].id, m.id)
+	t.eq(fresh[1].task, "只读检查"); t.eq(fresh[1].revision, m.revision)
 end)
 
 t.test("structured directory survives task text editing and launch awaits durable confirmation", function()
 	local s = model(); local m = add(s, "explicit", "deep"); m.thread = {}
 	m.edits.workspace = "/target"
 	m.edits.task = "执行 Workspace：/not-a-route\n只读排查"
-	local req = effects(action(s, "primary"), "prepare")[1]
-	local out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "confirmed prompt" })
+	cache(m, "confirmed prompt")
+	local out = action(s, "primary")
 	local write = effects(out, "write-task")[1]
 	t.eq(write.workspace, "/target"); t.eq(write.task_text, m.edits.task)
 	t.eq(write.revision, 0); t.eq(#effects(out, "open-task"), 0)
@@ -411,9 +674,9 @@ t.test("chat events use the run directory even when settings change mid-turn", f
 end)
 
 t.test("default directory changes during preparation require new confirmation", function()
-	local s = model(); local m = add(s, "directory-change", "deep"); m.thread = {}
+	local s = model(); local m = add(s, "directory-change", nil)
 	s.cfg.settings.workspace = "/original"
-	local req = effects(action(s, "primary"), "prepare")[1]
+	local req = effects(action(s, "open-task"), "prepare")[1]
 	s.cfg.settings.workspace = "/changed"
 	local out = update.apply(s, { type = "prepared", id = m.id, gen = req.gen, prompt = "Old workspace prompt" })
 	t.eq(#effects(out, "write-task"), 0); t.eq(m.disposition, nil)

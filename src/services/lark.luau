@@ -1,5 +1,5 @@
--- Everything the plugin asks of `lark-cli`, always as the current user.
--- Credentials stay with the CLI; this module never reads or stores a token.
+-- Business reads use the current user's identity; dedicated bot identity and
+-- event-listener helpers explicitly select their profile. Credentials stay in CLI.
 
 local tern = require("tern")
 
@@ -269,6 +269,66 @@ function lark.download_image(message_id: string, key: string, done: (string?, st
 		local name = string.match(data.saved_path, "([^/\\]+)$")
 		done(if name then "images/" .. name else nil, nil)
 	end)
+end
+
+-- One message by id, shaped like a search result (chat name and type filled in),
+-- read as the current user: the bot only points at it.
+function lark.message(message_id: string, done: (any, string?) -> ())
+	run({ "im", "+messages-mget", "--as", "user", "--message-ids", message_id, "--format", "json" }, nil, function(data, err)
+		local message = if type(data) == "table" and type(data.messages) == "table" then data.messages[1] else nil
+		if err or type(message) ~= "table" or message.message_id ~= message_id then
+			done(nil, err or "读取指令所指的消息失败。")
+			return
+		end
+		if type(message.sender) == "table" and message.sender.sender_type == nil then
+			message.sender.sender_type = if message.sender.id_type == "app_id" then "app" else "user"
+		end
+		run({ "im", "chats", "get", "--as", "user", "--chat-id", tostring(message.chat_id), "--format", "json" }, nil, function(chat, chat_err)
+			if chat_err or type(chat) ~= "table" then
+				done(nil, chat_err or "读取消息所在会话失败。")
+				return
+			end
+			message.chat_name = chat.name or message.chat_id
+			message.chat_type = if chat.chat_mode == "p2p" then "p2p" else "group"
+			done(message, nil)
+		end)
+	end)
+end
+
+-- Bot identity is scoped to its profile; mention IDs must match this exact ID.
+function lark.bot_info(profile: string, done: (string?, string?) -> ())
+	local started = pcall(function()
+		tern.process.run({ tern.kv.get("cli") or "lark-cli", "--profile", profile, "api", "GET",
+			"/open-apis/bot/v3/info", "--as", "bot", "--format", "json" }, { env = ENV, timeout_ms = 20000 }, function(result)
+			local envelope = decode(result.stdout) or decode(result.stderr)
+			local bot = envelope and envelope.data
+			if result.status == 0 and envelope and envelope.ok == true and type(bot) == "table"
+				and type(bot.open_id) == "string" and bot.open_id ~= "" then
+				done(bot.open_id, nil)
+			else
+				done(nil, failure(envelope, "无法取得专用机器人的身份，请确认 profile、机器人能力及应用发布状态。"))
+			end
+		end)
+	end)
+	if not started then done(nil, NOT_STARTED) end
+end
+
+-- The bot's message stream for one bounded run: each event becomes a JSON file in
+-- `dir` (relative to the plugin data folder, which must be the process cwd).
+function lark.bot_events_argv(profile: string, dir: string, minutes: number): { string }
+	return { tern.kv.get("cli") or "lark-cli", "--profile", profile, "event", "consume", "im.message.receive_v1",
+		"--as", "bot", "--timeout", tostring(minutes) .. "m", "--output-dir", dir }
+end
+
+lark.ENV = ENV
+
+-- The readable reason in a failed CLI's stderr: the (possibly pretty-printed)
+-- JSON envelope runs from the first line starting with `{` to the last `}`.
+function lark.error_of(stderr: string, fallback: string): string
+	local from = string.find(stderr, "\n{") or (if string.sub(stderr, 1, 1) == "{" then 0 else nil)
+	local to = string.match(stderr, ".*()}")
+	local envelope = if from and to then decode(string.sub(stderr, from + 1, to)) else nil
+	return if envelope and envelope.ok == false then failure(envelope, fallback) else fallback
 end
 
 return lark

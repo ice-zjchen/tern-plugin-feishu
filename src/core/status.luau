@@ -117,6 +117,13 @@ function status.task_workspace(m: Matter): string
 	return m.edits.workspace or (if j then j.task.workspace else "")
 end
 
+-- Context is transient and belongs to the exact task/message revision on screen.
+function status.task_context(m: Matter): types.TaskContext?
+	local c = m.context
+	return if c and status.kind(m) == "deep" and not status.stale(m)
+		and c.revision == m.revision and c.task == status.task_text(m) then c else nil
+end
+
 -- What the editor shows: a deep matter's task, else its reply.
 function status.field_text(m: Matter): string
 	return if status.kind(m) == "deep" then status.task_text(m) else status.reply_text(m)
@@ -155,6 +162,12 @@ function status.next_action(m: Matter): Action
 	elseif status.stale(m) then
 		return { key = "none", label = "等待新判断" }
 	elseif j.kind == "deep" then
+		local c = status.task_context(m)
+		if not c or c.phase == "thread" or c.phase == "model" then
+			return { key = "none", label = "判断任务上下文…" }
+		elseif c.phase == "failed" then
+			return { key = "retry-context", label = "重试上下文判断" }
+		end
 		return { key = "task", label = "开始任务" }
 	elseif j.kind == "fyi" then
 		return { key = "archive", label = "归档" }

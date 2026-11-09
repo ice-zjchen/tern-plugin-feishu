@@ -50,6 +50,13 @@ local function notices(model: any, lines: { any })
 	if model.problem then
 		table.insert(lines, line({ t("检索失败 ", "warning strong"), model.problem }, { key = "problem", role = "fl.notice" }))
 	end
+	if model.bot_problem then
+		table.insert(lines, line({ t("机器人状态 ", "warning strong"), model.bot_problem }, { key = "bot-problem", role = "fl.notice" }))
+	end
+	if model.bot_code and not model.cfg.bot_owner then
+		table.insert(lines, line({ t("绑定机器人：", "strong"), "在飞书里私聊机器人发送「绑定 " .. model.bot_code .. "」，之后只有你在群里 @机器人 才会立即处理。" },
+			{ key = "bot-bind", role = "fl.notice" }))
+	end
 end
 
 -- `compact` (a phone) puts the tabs on their own scrolling line and the buttons

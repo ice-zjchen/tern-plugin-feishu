@@ -101,6 +101,9 @@ local function analysis_block(model: any, item: any): any
 	if followup then
 		table.insert(children, line({ t(followup, "warning") }, { key = "followup" }))
 	end
+	if item.instruction then
+		table.insert(children, line({ t("你的指令：", "muted"), item.instruction }, { key = "instruction" }))
+	end
 	if judgment and judgment.manual then
 		table.insert(children, line({ t("这条由你处理，AI 没有判断过。", "muted") }))
 	elseif s == "failed" then
@@ -151,7 +154,7 @@ local function primary_button(item: any, variant: string): any
 		key = "primary", role = "fl.primary", variant = variant, actions = { click = "primary" },
 		disabled = action.key == "none", busy = item.preparing ~= nil,
 	}
-	if status.needs_confirm(item) then
+	if action.key == "task" and status.needs_confirm(item) then
 		-- Deliberately no shortcut: a stray `a` must not start this task.
 		props.actions = { click = "confirm-task" }
 		return ui.button("确认并开始任务", props)
@@ -208,6 +211,66 @@ local function task_card(model: any, item: any, facts: any): any
 	return ui.node("col", { key = "reply", role = "fl.task", gap = "md" }, children)
 end
 
+local function task_context(model: any, item: any): any
+	local prepared = status.task_context(item)
+	local children: { any } = {}
+	local function note(text: string, tone: string?, key: string)
+		table.insert(children, line({ t(text, tone) }, { key = key }))
+	end
+	if not prepared then
+		note("任务上下文 · 待更新", "strong", "head")
+		if status.stale(item) then
+			note("消息已变化，旧的上下文判断不再使用；新判断完成后会重新评估。", "warning", "stale")
+		elseif model.mode == "draft" then
+			note("编辑中的任务说明不会沿用旧结果；退出编辑后自动重新评估。", "muted", "editing")
+		elseif item.context then
+			note("任务或消息已变化，旧结果已失效，正在重新准备。", "warning", "stale")
+		else
+			note("正在为当前任务准备上下文判断，开始前即可在这里查看结果。", "info", "pending")
+		end
+	elseif prepared.phase == "thread" or prepared.phase == "model" then
+		note("任务上下文 · 正在评估", "strong", "head")
+		note(if prepared.phase == "thread" then "正在准备消息与材料，再判断本任务缺少什么。"
+			else "正在判断是否需要原始材料和相关讨论，不会开始执行任务。", "info", "assessing")
+	else
+		local failed = prepared.phase == "failed"
+		note(if failed then "任务上下文 · 评估失败" else "任务上下文 · 已就绪", "strong", "head")
+		local needs = prepared.needs
+		if needs then
+			local labels = { required = "需要", not_required = "不需要", unknown = "未确定" }
+			table.insert(children, ui.kv({
+				kv_row("材料需求", labels[needs.materials.choice]),
+				kv_row("讨论需求", labels[needs.discussion.choice]),
+			}))
+		end
+		if failed then
+			note(prepared.error or "未取得有效的上下文判断，任务尚未开始。", "warning", "error")
+			note("未生成可启动的上下文；不会因需求未确定而自动扩大聊天检索。", "muted", "scope")
+			table.insert(children, ui.node("row", { key = "retry" }, {
+				ui.button("重新评估上下文", { key = "context", variant = "quiet",
+					disabled = model.mode == "draft", actions = { click = "retry-context" } }),
+			}))
+		elseif needs then
+			if needs.plan == "none" then
+				note("发送任务说明；不额外附加飞书消息、会话定位或历史讨论。", "muted", "scope")
+			else
+				note("发送任务说明、会话和消息定位；任务中已有当前消息引用时不重复粘贴，否则附上触发消息。", "muted", "scope")
+				note("材料内容和完整聊天记录不会自动附上；定位不代表已读取内容。", "muted", "contents")
+				if needs.materials.choice == "required" then
+					note("材料：仅按任务或材料来源定位补齐所需截图、附件或引用内容。", "muted", "materials")
+				end
+				if needs.discussion.choice == "required" then
+					note("讨论：仅按当前消息补齐相关回复或相邻讨论中的信息缺口，不做无范围聊天检索。", "muted", "discussion")
+				else
+					note("不要求读取历史讨论，也不默认读取群内其他消息。", "muted", "discussion")
+				end
+			end
+			note("开始时直接复用此结果；任务说明或消息变化后会重新评估。", "muted", "reuse")
+		end
+	end
+	return ui.node("col", { key = "context", role = "fl.task.context", gap = "sm" }, children)
+end
+
 local function next_block(model: any, item: any, facts: any): any
 	if item.disposition == "doing" then
 		return task_card(model, item, facts)
@@ -239,6 +302,7 @@ local function next_block(model: any, item: any, facts: any): any
 			table.insert(children, line({ t("执行 Workspace：", "muted"), t(short_path(model, display), "path"),
 				t(if workspace == "" then "（默认）" else "", "muted") }, { key = "workspace", role = "fl.workspace" }))
 			table.insert(children, line({ t("可在下方对话修改执行目录；开始任务即确认此目录和上面的任务说明。", "muted") }))
+			table.insert(children, task_context(model, item))
 		end
 	elseif settled then
 		if string.find(facts.draft, "%S") then
@@ -282,7 +346,8 @@ local function next_block(model: any, item: any, facts: any): any
 	end
 	if not settled then
 		local buttons: { any } = {}
-		if status.next_action(item).key ~= "none" or item.preparing ~= nil then
+		local action = status.next_action(item)
+		if (action.key ~= "none" and action.key ~= "retry-context") or item.preparing ~= nil then
 			table.insert(buttons, primary_button(item, "primary"))
 		end
 		if s ~= "running" and not stale then

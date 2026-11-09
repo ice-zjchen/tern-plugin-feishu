@@ -58,6 +58,32 @@ function bridge.remove(id: string)
 	tern.kv.set("task-request:" .. id, nil)
 end
 
+-- Host only: tasks started by a bot command, opened by the window itself because
+-- no workbench link may exist. id -> request number.
+function bridge.auto_open(id: string, request_id: number)
+	local pending = get("task-auto-open") or {}
+	pending[id] = request_id
+	tern.kv.set("task-auto-open", pending)
+end
+
+function bridge.auto_pending(): { [string]: number }
+	return get("task-auto-open") or {}
+end
+
+-- Host only: an entry stays until its attempt has launched, ended or was replaced.
+function bridge.prune_auto()
+	local pending = get("task-auto-open")
+	if not pending then return end
+	local changed = false
+	for id, request_id in pending do
+		local current = bridge.task(id)
+		if not current or current.request_id ~= request_id or current.state ~= "starting" or current.launched then
+			pending[id], changed = nil, true
+		end
+	end
+	if changed then tern.kv.set("task-auto-open", if next(pending) then pending else nil) end
+end
+
 -- Window only. Reject callbacks from previous task attempts.
 function bridge.update(id: string, request_id: number, patch: any): boolean
 	local request = bridge.request(id)
