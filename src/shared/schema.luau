@@ -43,6 +43,8 @@ schema.FIELDS = ({
 	{ id = "ignore_keywords", group = "filters", kind = "text", default = "", label = "按群名隐藏", hint = "逗号分隔的关键词，如 notify,告警" },
 
 	{ id = "show_images", group = "run", kind = "switch", default = true, label = "显示图片", hint = "关闭后不下载，只显示 [图片]" },
+	{ id = "background", group = "run", kind = "switch", default = true, label = "后台运行", hint = "工作台关闭时继续获取和分析消息（会产生 AI 费用）；关闭后只在工作台打开时运行" },
+	{ id = "ai_timeout_minutes", group = "run", kind = "choice", default = 30, choices = { 5, 15, 30, 60, 120 }, label = "AI 超时（分钟）", hint = "初判、对话、上下文判断和看图；下一次调用生效" },
 	{ id = "poll_minutes", group = "run", kind = "choice", default = 3, choices = { 0, 1, 3, 10, 30 }, label = "自动刷新（分钟）" },
 	{ id = "lookback_days", group = "run", kind = "choice", default = 2, choices = { 1, 2, 3, 7 }, label = "检索最近几天" },
 } :: { Field })

@@ -25,6 +25,8 @@ local function actions(model: any, facts: any, compact: boolean): any
 	local nodes: { any } = {}
 	if facts.running > 0 then
 		table.insert(nodes, line({ t("● 分析中 " .. tostring(facts.running), "info") }))
+		table.insert(nodes, ui.button("全部停止", { key = "stop-all", size = "sm", variant = "quiet",
+			title = "停止所有正在进行的初判，并暂停自动分析", actions = { click = "stop-all" } }))
 	elseif not compact then
 		-- On a phone the paused state lives in settings; the row has room for the buttons only.
 		table.insert(nodes, line({ t(if model.cfg.settings.agent_enabled then "分析空闲" else "自动分析已暂停", "muted") }))

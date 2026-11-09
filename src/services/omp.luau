@@ -9,7 +9,6 @@ local context_trace = require("../core/context_trace")
 
 local omp = {}
 
-local TIMEOUT_MS = 180000
 local MAX_STEPS = 30
 
 -- What a turn is for, and which setting picks its model ("" keeps omp's default).
@@ -157,14 +156,21 @@ local function first_error_line(stderr: string): string
 	return "没有错误输出"
 end
 
--- Runs one turn. `notice` gets the workspace fallback warning (or nil);
--- `done` gets the assistant's final text, the session, the cost and the run record.
-function omp.turn(turn: Turn, notice: (string?) -> (), done: Done)
+-- One running turn's stop handle: the PID is recorded by a shell that then execs omp.
+local runs = 0
+local function pid_file(token: string): string
+	return tern.plugin.data .. "/runs/" .. token .. ".pid"
+end
+
+-- Runs one turn and returns its stop token (nil when nothing was started).
+-- `notice` gets the workspace fallback warning (or nil); `done` gets the
+-- assistant's final text, the session, the cost and the run record.
+function omp.turn(turn: Turn, notice: (string?) -> (), done: Done): string?
 	local resume = if stage.isolated(turn.purpose) then nil else turn.resume
 	local prepared, env = pcall(launch.prepare, turn.purpose)
 	if not prepared then
 		done(nil, resume, 0, "无法准备 AI 运行目录或配置：" .. tostring(env), nil)
-		return
+		return nil
 	end
 	notice(env.warning)
 	local system = turn.system_prompt or (if turn.purpose == "relevance" then prompts.render("context", "system")
@@ -179,15 +185,24 @@ function omp.turn(turn: Turn, notice: (string?) -> (), done: Done)
 		process_env.FEISHU_WORKBENCH_SYSTEM_PROMPT = system
 	end
 	local began = os.time()
+	local timeout_ms = settings.get("ai_timeout_minutes") * 60 * 1000
+	runs += 1
+	local token = tostring(os.time()) .. "-" .. tostring(runs)
+	local pids = pid_file(token)
+	-- exec keeps the PID, stdin and exit status of omp itself.
+	local argv = { "/bin/sh", "-c", 'printf %s "$$" > "$0" && exec "$@"', pids }
+	for _, arg in command.argv do table.insert(argv, arg) end
 	local started = pcall(function()
-		tern.process.run(command.argv, { cwd = env.cwd, env = process_env, stdin = command.prompt, timeout_ms = TIMEOUT_MS }, function(result)
+		tern.fs.mkdir(tern.plugin.data .. "/runs")
+		tern.process.run(argv, { cwd = env.cwd, env = process_env, stdin = command.prompt, timeout_ms = timeout_ms }, function(result)
+			pcall(tern.fs.remove, pids)
 			local session, said, cost, failure, run = read_events(result.stdout or "")
 			session = session or resume
 			run.cwd, run.skills, run.incremental = env.cwd, env.skills, resume ~= nil
 			run.thinking = run.thinking or thinking
 			run.seconds, run.cost, run.at = os.time() - began, cost, os.date("%m-%d %H:%M") :: string
 			if result.timed_out then
-				done(nil, resume, 0, "AI 超时（" .. tostring(TIMEOUT_MS // 1000) .. " 秒）。", run)
+				done(nil, session, cost, "AI 超时（" .. tostring(timeout_ms // 60000) .. " 分钟），可在“运行”设置中延长后手动重试。", run)
 			elseif result.status ~= 0 then
 				done(nil, session, cost, "AI 程序退出码 " .. tostring(result.status) .. "：" .. first_error_line(result.stderr), run)
 			elseif failure then
@@ -201,7 +216,18 @@ function omp.turn(turn: Turn, notice: (string?) -> (), done: Done)
 	end)
 	if not started then
 		done(nil, resume, 0, "无法启动 AI 程序。请通过命令面板「飞书 Feishu / Lark：设置 AI 程序路径」指定可执行文件。", nil)
+		return nil
 	end
+	return token
+end
+
+-- Asks a running turn to stop: its tool processes first, then omp. The turn's
+-- own callback reports the outcome; a turn that already ended is left alone.
+function omp.stop(token: string): boolean
+	local ok, pid = pcall(tern.fs.read, pid_file(token))
+	if not ok or type(pid) ~= "string" or not string.match(pid, "^%d+$") then return false end
+	tern.process.run({ "/bin/sh", "-c", 'pkill -TERM -P "$0"; kill -TERM "$0"', pid }, function() end)
+	return true
 end
 
 -- Drops a session's files once its message is settled.

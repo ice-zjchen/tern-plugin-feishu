@@ -14,7 +14,7 @@ local bindings: { Binding } = {
 	{ key = "R", action = "refresh" }, { key = "f5", action = "refresh" }, { key = "m", action = "load-more" },
 	{ key = "*", action = "star" }, { key = "enter", action = "open" }, { key = ",", action = "settings" },
 	{ key = "g", action = "force" }, { key = "i", action = "hide-chat" }, { key = "n", action = "manual-chat" },
-	{ key = "h", action = "history" },
+	{ key = "h", action = "history" }, { key = "p", action = "stop" },
 }
 local actions: { [string]: string } = {}
 for _, binding in bindings do actions[binding.key] = binding.action end

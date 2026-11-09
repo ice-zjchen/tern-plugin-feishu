@@ -2,6 +2,10 @@
 local tern = require("tern")
 local runtime = require("./runtime")
 
+-- Background work starts with the plugin; a broken snapshot is reported when a
+-- workbench opens and retries the start.
+pcall(runtime.start)
+
 tern.block.define("inbox", {
 	font = "sans",
 	init = function(cx, _args, saved)

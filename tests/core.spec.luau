@@ -59,6 +59,45 @@ t.test("views and tab share exclusive pending/doing/later counts", function()
 	t.eq(status.next_action(p).key, "task")
 end)
 
+t.test("with background off and no workbench open, nothing new is fetched or analyzed", function()
+	local s = model(); s.loaded = true
+	s.cfg.settings.background, s.cfg.settings.agent_enabled = false, true
+	s.last_refresh = s.cfg.now - 3600
+	local m = add(s, "queued"); m.analysis.phase = "queued"
+	s.queue_enabled = true
+	local hidden_out = update.apply(s, { type = "tick" })
+	t.eq(#effects(hidden_out, "fetch"), 0); t.eq(m.analysis.phase, "queued")
+	s.cfg.visible = true
+	local shown_out = update.apply(s, { type = "tick" })
+	t.eq(#effects(shown_out, "fetch"), 1); t.eq(m.analysis.phase, "running")
+	s.cfg.visible, s.cfg.settings.background, s.loading = false, true, false
+	s.last_refresh = s.cfg.now - 3600
+	t.eq(#effects(update.apply(s, { type = "tick" }), "fetch"), 1)
+end)
+
+t.test("a stopped analysis waits for retry and is not requeued by new messages", function()
+	local s = model()
+	local m = add(s, "stop"); m.analysis.phase, m.analysis.stage, m.analysis.gen = "running", "model", 7
+	m.analysis.reanalyze = true
+	local out = action(s, "stop")
+	t.eq(#effects(out, "stop-analysis"), 1); t.eq(m.analysis.phase, "running")
+	update.apply(s, { type = "analyzed", id = m.id, gen = 7, error = "AI 程序退出码 -1" })
+	t.eq(m.analysis.phase, "failed"); t.eq(m.analysis.reanalyze, false)
+	t.eq(string.find(m.analysis.error :: string, "手动停止", 1, true) ~= nil, true)
+	local loading = add(s, "loading"); loading.analysis.phase, loading.analysis.stage = "running", "thread"
+	s.selected = loading.id
+	t.eq(#effects(action(s, "stop"), "stop-analysis"), 0); t.eq(loading.analysis.phase, "failed")
+	s.selected = m.id; action(s, "retry"); t.eq(m.analysis.phase ~= "failed", true)
+end)
+
+t.test("stopping all signals every running model turn and pauses automatic analysis", function()
+	local s = model(); s.cfg.settings.agent_enabled = true
+	local one = add(s, "one"); one.analysis.phase, one.analysis.stage = "running", "model"
+	local two = add(s, "two"); two.analysis.phase, two.analysis.stage = "running", "model"
+	local out = action(s, "stop-all")
+	t.eq(#effects(out, "stop-analysis"), 2); t.eq(s.cfg.settings.agent_enabled, false)
+end)
+
 t.test("risk confirmation cannot be bypassed by a key action", function()
 	local s = model(); local m = add(s, "risk", "deep")
 	local judgment = m.analysis.judgment :: types.Judgment

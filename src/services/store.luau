@@ -122,15 +122,4 @@ function store.load(cfg: Config): Model?
 	return model
 end
 
-function store.close(model: Model)
-	if active ~= model then
-		-- Closing an old pane must not flush/cancel the current pane's writer.
-		retired[model] = true
-		return
-	end
-	store.save_now(model)
-	retired[model] = true
-	active = nil
-end
-
 return store

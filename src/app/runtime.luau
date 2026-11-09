@@ -1,6 +1,6 @@
 -- The host runtime owns IO and lifecycle, not domain transitions. Every result
--- enters core/update as an event. A single live model is shared by the plugin's
--- workbench panes, so stale panes cannot overwrite each other's snapshot.
+-- enters core/update as an event. It starts with the plugin and keeps polling,
+-- analyzing and syncing tasks with no workbench open; panes only display it.
 local tern = require("tern")
 local update = require("../core/update")
 local views = require("../core/views")
@@ -52,13 +52,7 @@ local function cancel(rt, name)
 end
 
 local function alive(rt): boolean
-	if active ~= rt or rt.closed then return false end
-	if context(rt) then return true end
-	rt.closed = true
-	for name in rt.timers do cancel(rt, name) end
-	store.close(rt.model)
-	active = nil
-	return false
+	return active == rt
 end
 
 local function timer(rt, name, ms, fn)
@@ -109,10 +103,13 @@ poll_tasks = function(rt)
 	if changed then dispatch(rt, { type = "tasks", tasks = tasks }) end
 end
 
+-- Effects a person triggers or needs to see; there is nowhere to show them without a pane.
+local NEEDS_PANE = { open = true, copy = true, toast = true, focus = true, ["open-task"] = true }
+
 execute = function(rt, effect)
 	local ty = effect.type
 	local cx = context(rt)
-	if not cx then return end
+	if NEEDS_PANE[ty] and not cx then return end
 	if ty == "save" then store.save(rt.model)
 	elseif ty == "save-now" then store.save_now(rt.model)
 	elseif ty == "record" then store.record(effect.ids, effect.outcome)
@@ -161,10 +158,18 @@ execute = function(rt, effect)
 	elseif ty == "analyze" then
 		local thread = effect.matter.thread or {}
 		local through = if #thread > 0 then thread[#thread].id else nil
-		ai.analyze(effect.matter, effect.extras, effect.images, function(w) notice(rt, w) end, function(judgment, session, cost, err, run)
+		local finished = false
+		local token = ai.analyze(effect.matter, effect.extras, effect.images, function(w) notice(rt, w) end, function(judgment, session, cost, err, run)
+			finished = true
+			local turn = rt.turns[effect.id]
+			if turn and turn.gen == effect.gen then rt.turns[effect.id] = nil end
 			dispatch(rt, { type = "analyzed", id = effect.id, gen = effect.gen, judgment = judgment, session = session,
 				cost = cost, error = err, run = run, through = through })
 		end)
+		if token and not finished then rt.turns[effect.id] = { gen = effect.gen, token = token } end
+	elseif ty == "stop-analysis" then
+		local turn = rt.turns[effect.id]
+		if turn and turn.gen == effect.gen then omp.stop(turn.token) end
 	elseif ty == "converse" then
 		ai.converse(effect.matter, effect.extras, effect.current, effect.said, function(w) notice(rt, w) end, function(reply, change, session, cost, err, run)
 			dispatch(rt, { type = "conversed", id = effect.id, gen = effect.gen, reply = reply, change = change,
@@ -193,7 +198,7 @@ execute = function(rt, effect)
 		if bridge.request(effect.id) or bridge.state(effect.id) then
 			bridge.remove(effect.id)
 			-- Only the window deletes its result record; host open() routes links.
-			cx:open(bridge.CLEANUP_LINK .. effect.id)
+			if cx then cx:open(bridge.CLEANUP_LINK .. effect.id) end
 		end
 	elseif ty == "open-task" then cx:open(bridge.LINK .. effect.id)
 	elseif ty == "poll-tasks" then poll_tasks(rt)
@@ -243,6 +248,7 @@ dispatch = function(rt, event)
 	while #rt.events > 0 do
 		local next_event = table.remove(rt.events, 1)
 		rt.model.cfg = config()
+		rt.model.cfg.visible = context(rt) ~= nil
 		local effects, changed = update.apply(rt.model, next_event)
 		handled = handled or changed
 		for _, effect in effects do
@@ -252,17 +258,16 @@ dispatch = function(rt, event)
 	end
 	rt.dispatching = false
 	sync_timers(rt)
-	if handled then
+	-- Closed panes are dropped before rendering; with none open the work still went on.
+	if handled and context(rt) then
 		for _, pane in rt.panes do pane:render() end
 	end
 	return handled
 end
 
-function runtime.attach(cx, saved)
-	if active and not active.closed then
-		active.panes[cx.pane] = cx
-		return active
-	end
+-- Started when the plugin loads, so messages keep coming with every workbench closed.
+function runtime.start()
+	if active then return active end
 	local cfg = config()
 	local model = store.load(cfg) or snapshot.empty(cfg)
 	local ids = {}; for _, m in model.items do table.insert(ids, m.id) end
@@ -278,23 +283,21 @@ function runtime.attach(cx, saved)
 			m.task.task_text, m.task.title = request.task_text, request.title
 		end
 	end
-	if saved and views.known(saved.view) then model.view = saved.view end
-	local rt = { model = model, panes = { [cx.pane] = cx }, timers = {}, events = {}, dispatching = false, closed = false }
+	local rt = { model = model, panes = {}, timers = {}, events = {}, dispatching = false, turns = {} }
 	active = rt
-	-- Recreate only blobs for the selected matter, without fetching chat or images.
-	for _, m in model.items do
-		if m.id == model.selected and cfg.settings.show_images then
-			for _, message in m.thread or {} do
-				for _, key in markup.images(message.content, 4) do
-					local image = model.images[key]
-					if image and image.path then
-						local ok, blob = pcall(load_blob, rt, image.path)
-						if ok then image.blob = blob else model.images[key] = nil end
-					end
-				end
-			end
-		end
+	dispatch(rt, { type = "init" })
+	return rt
+end
+
+function runtime.attach(cx, saved)
+	local rt = runtime.start()
+	if not context(rt) then
+		-- Image handles belong to the pane that made them; the first pane after
+		-- none rebuilds them from the downloaded files.
+		for _, image in rt.model.images do image.blob = nil end
+		if saved and views.known(saved.view) then rt.model.view = saved.view end
 	end
+	rt.panes[cx.pane] = cx
 	dispatch(rt, { type = "init" })
 	return rt
 end

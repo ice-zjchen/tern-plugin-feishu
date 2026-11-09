@@ -109,7 +109,12 @@ local function analysis_block(model: any, item: any): any
 			ui.button("重试分析", { actions = { click = "retry" } }),
 		}))
 	elseif s == "running" then
-		table.insert(children, line({ t("正在判断这条消息…", "info") }))
+		local stopping = item.analysis.stopping == true
+		table.insert(children, line({ t(if stopping then "正在停止分析…" else "正在判断这条消息…", "info") }))
+		table.insert(children, ui.node("row", { key = "stop" }, {
+			ui.button(if stopping then "停止中…" else "停止分析", { key = "stop", variant = "quiet", keys = { "p" },
+				disabled = stopping, busy = stopping, actions = { click = "stop" } }),
+		}))
 	elseif s == "queued" and (item.analysis.settle_at or 0) > model.cfg.now then
 		table.insert(children, line({ t("对话还在继续，停一会儿再判断。", "muted") }))
 	elseif not judgment and not item.disposition then

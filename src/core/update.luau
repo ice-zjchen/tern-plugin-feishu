@@ -28,6 +28,12 @@ local function next_gen(model: Model): number
 	return model.gen
 end
 
+-- Fetching and starting AI turns: always while a workbench shows, otherwise only
+-- when background running is allowed. Work already in flight always finishes.
+local function may_run(model: Model): boolean
+	return model.cfg.visible == true or model.cfg.settings.background == true
+end
+
 local function selection(model: Model): views.Selection
 	return { view = model.view, source = model.source, person = model.person }
 end
@@ -307,6 +313,25 @@ local function undo(model: Model, out: { Effect })
 	end
 end
 
+local STOPPED = "已手动停止分析，按 r 重新分析。"
+
+-- Stops one running analysis. Before the model starts there is nothing to kill;
+-- after, the process is signalled and its callback reports the stop. A stopped
+-- matter waits for r: it is never picked up again by the queue on its own.
+local function stop_analysis(model: Model, m: Matter, out: { Effect })
+	local a = m.analysis
+	if a.phase ~= "running" or a.stopping then return end
+	if a.stage == "model" then
+		a.stopping = true
+		emit(out, { type = "stop-analysis", id = m.id, gen = a.gen })
+		model.flash = "正在停止分析：" .. m.name
+	else
+		a.phase, a.stage, a.error, a.reanalyze = "failed", nil, STOPPED, false
+		model.flash = "已停止分析：" .. m.name
+		matter.log(model, "你", "停止了对 " .. m.name .. " 的分析")
+	end
+end
+
 local function action(model: Model, event: Event, out: { Effect })
 	local name, value = event.name, event.value
 	local m = current(model)
@@ -325,6 +350,14 @@ local function action(model: Model, event: Event, out: { Effect })
 		model.person = if model.person == value then nil else value
 		model.selected, model.reading = nil, nil; reselect(model, 1)
 	elseif name == "refresh" then refresh(model, false, out)
+	elseif name == "stop-all" then
+		local stopped = 0
+		for _, it in model.items do
+			if it.analysis.phase == "running" then stop_analysis(model, it, out); stopped += 1 end
+		end
+		if model.cfg.settings.agent_enabled then setting_changed(model, "agent_enabled", false, out) end
+		model.flash = "已停止 " .. tostring(stopped) .. " 个分析并暂停自动分析；可在设置中重新开启"
+		matter.log(model, "你", model.flash :: string)
 	elseif name == "load-more" then refresh(model, true, out)
 	elseif name == "settings" then
 		focus(model, nil, out)
@@ -374,6 +407,7 @@ local function action(model: Model, event: Event, out: { Effect })
 		elseif not status.settled(m) then resolve(model, m, "snoozed", "稍后处理", out) end
 	elseif name == "redraft" or name == "retry" then
 		if m.analysis.phase == "failed" then m.analysis.phase, m.analysis.settle_at = "queued", nil end
+	elseif name == "stop" then stop_analysis(model, m, out)
 	elseif name == "edit" then start_edit(model, m, out)
 	elseif name == "open" then open_message(model, m, out)
 	elseif name == "star" then
@@ -476,7 +510,7 @@ local function advance(model: Model, out: { Effect })
 	-- Running work is counted from the model, never by increment/decrement callbacks.
 	local active = 0
 	for _, m in model.items do if m.analysis.phase == "running" then active += 1 end end
-	while model.queue_enabled and active < model.cfg.settings.concurrency do
+	while model.queue_enabled and may_run(model) and active < model.cfg.settings.concurrency do
 		local chosen = current(model)
 		local function ready(m: Matter): boolean
 			local a = m.analysis
@@ -539,7 +573,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			emit(out, { type = "poll-tasks" })
 			local selected = current(model)
 			if selected then show_images(model, selected, out) end
-		else refresh(model, false, out) end
+		elseif may_run(model) then refresh(model, false, out) end
 		if model.page == "history" then
 			local h = model.history or history.empty()
 			model.history = h
@@ -575,7 +609,7 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 	elseif ty == "settings-close" then model.page = nil; refresh(model, false, out)
 	elseif ty == "tick" then
 		local minutes = model.cfg.settings.poll_minutes
-		if minutes > 0 and model.cfg.now - (model.last_refresh or model.cfg.now) >= minutes * 60 then refresh(model, false, out) end
+		if minutes > 0 and may_run(model) and model.cfg.now - (model.last_refresh or model.cfg.now) >= minutes * 60 then refresh(model, false, out) end
 	elseif ty == "notice" then
 		if model.runtime_warning ~= event.warning then
 			model.runtime_warning = event.warning
@@ -688,12 +722,15 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 		local a = m.analysis
 		if a.phase ~= "running" or a.gen ~= event.gen then return out, false end
 		a.session, a.run = event.session or a.session, event.run or a.run
-		if a.reanalyze then
+		-- A stop you asked for wins over a pending re-run; a result that finished first is kept.
+		local stopped = a.stopping == true
+		a.stopping = nil
+		if a.reanalyze and not stopped then
 			a.phase, a.stage, a.reanalyze, m.thread = "queued", nil, false, nil
 		elseif event.error then
-			a.phase, a.error, a.stage = "failed", event.error, nil
+			a.phase, a.error, a.stage, a.reanalyze = "failed", if stopped then STOPPED else event.error, nil, false
 			if a.resumed then a.session = nil end
-			matter.log(model, "AI", m.name .. "：分析失败")
+			matter.log(model, "AI", m.name .. (if stopped then "：已手动停止分析" else "：分析失败"))
 		else
 			a.phase, a.error, a.stage, a.judgment, a.through = "done", nil, nil, event.judgment, event.through
 			m.edits = {}

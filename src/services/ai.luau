@@ -55,7 +55,7 @@ local function messages_after(thread: { any }, through: string): { any }?
 	return if found then after else nil
 end
 
-function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notice, done: (types.Judgment?, string?, number, string?, omp.Run?) -> ())
+function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notice, done: (types.Judgment?, string?, number, string?, omp.Run?) -> ()): string?
 	local a = m.analysis
 	local thread = matter.agent_thread(m)
 	local new_messages = if a.session and a.judgment and a.through then messages_after(thread, a.through) else nil
@@ -75,7 +75,7 @@ function ai.analyze(m: Matter, extras: Extras, images: { string }, notice: Notic
 			format = prompts.render("analysis", "format"),
 		})
 	end
-	omp.turn({ prompt = prompt, purpose = "analysis", resume = resume, images = images }, notice, function(text, session, cost, err, run)
+	return omp.turn({ prompt = prompt, purpose = "analysis", resume = resume, images = images }, notice, function(text, session, cost, err, run)
 		if err then done(nil, session, cost, err, run); return end
 		local output = omp.json_in(text or "")
 		if not output then

@@ -42,6 +42,8 @@ export type Analysis = {
 	force: boolean,
 	-- New messages arrived during a running turn.
 	reanalyze: boolean,
+	-- You asked to stop this running turn; its result is reported as stopped. Not persisted.
+	stopping: boolean?,
 	run: any,
 }
 
@@ -138,6 +140,8 @@ export type Config = {
 	stars: { { id: string, name: string } },
 	now: number,
 	home: string?,
+	-- A workbench pane is open; without one, work runs only if background is allowed.
+	visible: boolean?,
 }
 
 export type Model = {
