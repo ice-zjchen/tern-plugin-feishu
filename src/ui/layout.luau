@@ -1,6 +1,7 @@
 local p = require("./primitives")
 local status = require("../core/status")
 local keymap = require("../shared/keymap")
+local views = require("../core/views")
 local ui, t, line = p.ui, p.t, p.line
 
 local layout = {}
@@ -8,15 +9,14 @@ local layout = {}
 local function nav_strip(model: any, facts: any, compact: boolean): any
 	local tabs = {}
 	for _, def in facts.views do
-		if def.id == "pending" or def.id == "doing" or def.id == "later" or def.id == "done" then
-			local current = model.page == nil and not model.person and model.view == def.id
+		if def.id == "pending" or def.id == "doing" or def.id == "later" or def.id == "done" or def.id == "bot" then
+			local current = model.page == nil and (def.id == "bot" or not model.person) and model.view == def.id
 			table.insert(tabs, ui.button(def.label .. " " .. tostring(def.count), {
 				key = def.id, role = if current then "fl.nav.current" else "fl.nav", variant = "quiet", on = current,
 				actions = { click = "view=" .. def.id },
 			}))
 		end
 	end
-	table.insert(tabs, ui.button("@我历史", { key = "history", variant = "quiet", on = model.page == "history", actions = { click = "history" } }))
 	-- A phone keeps the tabs on one line and scrolls them sideways.
 	return ui.node("row", { key = "tabs", role = if compact then "fl.tabs.scroll" else "fl.tabs", gap = "none", wrap = not compact }, tabs)
 end
@@ -32,7 +32,7 @@ local function actions(model: any, facts: any, compact: boolean): any
 		table.insert(nodes, line({ t(if model.cfg.settings.agent_enabled then "分析空闲" else "自动分析已暂停", "muted") }))
 	end
 	table.insert(nodes, ui.button(if model.loading then "刷新中…" else "刷新", {
-		key = "refresh", size = "sm", actions = { click = if model.page == "history" then "history-refresh" else "refresh" }, busy = model.loading, disabled = model.loading,
+		key = "refresh", size = "sm", actions = { click = "refresh" }, busy = model.loading, disabled = model.loading,
 	}))
 	table.insert(nodes, ui.button(if model.page ~= "settings" then "设置" elseif compact then "返回" else "返回工作台", {
 		key = "settings", size = "sm", actions = { click = "settings" },
@@ -54,7 +54,7 @@ local function notices(model: any, lines: { any })
 		table.insert(lines, line({ t("机器人状态 ", "warning strong"), model.bot_problem }, { key = "bot-problem", role = "fl.notice" }))
 	end
 	if model.bot_code and not model.cfg.bot_owner then
-		table.insert(lines, line({ t("绑定机器人：", "strong"), "在飞书里私聊机器人发送「绑定 " .. model.bot_code .. "」，之后只有你在群里 @机器人 才会立即处理。" },
+		table.insert(lines, line({ t("绑定机器人：", "strong"), "在飞书里私聊 " .. views.bot_label(model.cfg.bot_name) .. " 发送「绑定 " .. model.bot_code .. "」，之后只有你在群里 " .. views.bot_label(model.cfg.bot_name) .. " 才会立即处理。" },
 			{ key = "bot-bind", role = "fl.notice" }))
 	end
 end
@@ -131,7 +131,7 @@ function layout.dock(model: any, facts: any, density: string): any?
 	end
 	local hints = {}
 	local adjustable = facts.item ~= nil and status.can_adjust(facts.item)
-	for _, hint in keymap.hints(model.page, adjustable, density == "narrow") do
+	for _, hint in keymap.hints(model.page, adjustable, density == "narrow", model.view) do
 		local k, label = string.match(hint, "^(%S+) (.+)$")
 		table.insert(hints, t(k :: string, "strong"))
 		table.insert(hints, t(" " .. (label :: string) .. "   ", "muted"))

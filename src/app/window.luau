@@ -16,8 +16,8 @@ end
 
 tern.command({ id = "inbox", title = "飞书 Feishu / Lark：打开工作台", keys = { "ctrl+alt+shift+f" },
 	run = function(cx) open_workbench(cx, {}) end })
-tern.command({ id = "open", title = "飞书 Feishu / Lark：查看 @我的消息",
-	run = function(cx) open_workbench(cx, { "history" }) end })
+tern.command({ id = "bot", title = "飞书 Feishu / Lark：查看机器人指令与任务聚合",
+	run = function(cx) open_workbench(cx, { "bot" }) end })
 
 local function path_command(id, title, key, placeholder)
 	tern.command({ id = id, title = title, run = function(cx)

@@ -163,10 +163,6 @@ execute = function(rt, effect)
 			event.decisions = store.decisions()
 			dispatch(rt, event)
 		end)
-	elseif ty == "history-search" then
-		lark.search({ filters = { "--is-at-me" }, token = effect.token }, function(page, err)
-			dispatch(rt, { type = "history", name = "result", gen = effect.gen, page = page, error = err })
-		end)
 	elseif ty == "chat-settings" then
 		lark.chat_settings(effect.ids, function(found, err)
 			dispatch(rt, { type = "chat-settings", gen = effect.gen, ids = effect.ids, fresh = effect.fresh, found = found, error = err })
@@ -261,7 +257,8 @@ execute = function(rt, effect)
 			if message and (message.chat_id ~= effect.chat_id or message.deleted) then
 				message, err = nil, "指令目标已撤回或不在同一会话，未启动分析。"
 			end
-			dispatch(rt, { type = "bot-message", message = message, error = err, instruction = effect.instruction, command = effect.command })
+			dispatch(rt, { type = "bot-message", message = message, error = err, instruction = effect.instruction,
+				command = effect.command, bot_profile = profile })
 		end)
 	elseif ty == "continue" then dispatch(rt, { type = "continue" })
 	elseif ty == "wake" then
@@ -278,7 +275,6 @@ local function failed_effect(rt, effect, err)
 		dispatch(rt, { type = event_type, id = effect.id, gen = effect.gen, revision = effect.revision,
 			latest = effect.latest, error = tostring(err), found = {}, added = effect.added })
 	elseif ty == "image" then dispatch(rt, { type = "image", key = effect.key, error = tostring(err) })
-	elseif ty == "history-search" then dispatch(rt, { type = "history", name = "result", gen = effect.gen, error = tostring(err) })
 	elseif ty == "write-task" then
 		dispatch(rt, { type = "task-write-failed", id = effect.id, revision = effect.revision, error = tostring(err) })
 	elseif ty == "workbench-event" then
@@ -303,6 +299,7 @@ dispatch = function(rt, event)
 		rt.model.cfg = config()
 		rt.model.cfg.visible = context(rt) ~= nil
 		rt.model.cfg.bot_id = if rt.bot and rt.bot.profile == rt.model.cfg.settings.bot_profile then rt.bot.open_id else nil
+		rt.model.cfg.bot_name = if rt.bot and rt.bot.profile == rt.model.cfg.settings.bot_profile then rt.bot.name else nil
 		local effects, changed = update.apply(rt.model, next_event)
 		handled = handled or changed
 		for _, effect in effects do

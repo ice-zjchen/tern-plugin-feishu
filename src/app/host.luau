@@ -10,7 +10,7 @@ tern.block.define("inbox", {
 	font = "sans",
 	init = function(cx, _args, saved)
 		local rt = runtime.attach(cx, saved)
-		if _args[1] == "history" then runtime.event(rt, { ev = "action", act = "history" }, cx) end
+		if _args[1] == "bot" then runtime.event(rt, { ev = "action", act = "view", value = "bot" }, cx) end
 		return rt
 	end,
 	view = runtime.render,

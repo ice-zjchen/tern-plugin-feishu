@@ -4,8 +4,6 @@
 -- independent parts: what AI made of it (`analysis`), what you did with it
 -- (`disposition`), and the task tab working on it (`task`).
 
-local history = require("./history")
-
 export type Pri = "P0" | "P1" | "P2" | "P3"
 export type Kind = "fyi" | "reply" | "deep"
 
@@ -103,6 +101,8 @@ export type Matter = {
 	link: string?,
 	mention: boolean,
 	via: string,
+	-- Dedicated app profile that authenticated the command; independent of `via`.
+	bot_profile: string?,
 	-- Ids of the earlier messages folded into this one.
 	folded: { string },
 	-- The newest folded message, when it is not `id`.
@@ -161,6 +161,7 @@ export type Config = {
 	-- Your open_id as the dedicated bot app sees you, once bound; nil disables commands.
 	bot_owner: string?,
 	bot_id: string?,
+	bot_name: string?,
 }
 
 export type Model = {
@@ -173,7 +174,6 @@ export type Model = {
 	selected: string?,
 	-- A phone-width pane shows the selected message instead of the queue. Not saved.
 	reading: boolean?,
-	history: history.State?,
 	page: string?,
 	mode: string?,
 	command: string,

@@ -71,6 +71,94 @@ t.test("views and tab share exclusive pending/doing/later counts", function()
 	t.eq(status.next_action(p).key, "task")
 end)
 
+t.test("bot aggregation does not depend on analysis phase", function()
+	local s = model()
+	for _, phase in { "queued", "running", "failed", "done" } do
+		local m = add(s, "analysis-" .. phase)
+		m.bot_profile, m.analysis.phase = "dedicated", phase :: types.Phase
+	end
+	t.eq(#views.visible(s.items, { view = "bot", source = "all", bot_profile = "dedicated" }), 4)
+	t.eq(views.counts(s.items, "dedicated").bot, 4)
+end)
+
+t.test("bot source includes every disposition and task state only for the current nonempty profile", function()
+	local s = model(); s.cfg.settings.bot_profile = "dedicated"
+	local dispositions: { types.Disposition } = { "handoff", "snoozed", "doing", "archived", "replied" }
+	local open = add(s, "bot-open", "reply"); open.bot_profile = "dedicated"
+	for _, disposition in dispositions do
+		local m = add(s, "bot-" .. disposition, "deep")
+		m.bot_profile, m.disposition, m.hidden = "dedicated", disposition, true
+	end
+	for _, phase in { "starting", "working", "waiting", "done", "closed" } do
+		local m = add(s, "task-" .. phase, "deep")
+		m.bot_profile, m.disposition = "dedicated", "doing"
+		m.task = { phase = phase :: types.TaskPhase, new_messages = 0 }
+	end
+	local ordinary = add(s, "ordinary", "reply"); ordinary.instruction = "not an authenticated command"
+	local other = add(s, "other-profile", "reply"); other.bot_profile = "other"
+	local shown = views.visible(s.items, { view = "bot", source = "dm", person = "unrelated", bot_profile = "dedicated" })
+	t.eq(#shown, 11); t.eq(views.counts(s.items, "dedicated").bot, 11)
+	for _, m in shown do t.eq(m.bot_profile, "dedicated") end
+	t.eq(#views.visible(s.items, { view = "bot", source = "all" }), 0)
+	t.eq(#views.visible(s.items, { view = "bot", source = "all", bot_profile = "" }), 0)
+	t.eq(views.counts(s.items).bot, 0)
+end)
+
+t.test("bot view uses the actual app name and clears filters without searching history", function()
+	local s = model(); s.loaded = true; s.cfg.settings.bot_profile = "dedicated"
+	local m = add(s, "bot-source", "reply"); m.bot_profile = "dedicated"
+	s.source, s.person, s.page = "dm", "another-person", "settings"
+	s.cfg.bot_name = "实际应用名"
+	local out = action(s, "view", "bot")
+	t.eq(s.page, nil); t.eq(s.source, "all"); t.eq(s.person, nil); t.eq(s.selected, m.id)
+	for _, effect in out do t.eq(effect.type == "history-search" or effect.type == "fetch", false) end
+	local facts = update.facts(s)
+	t.eq(#facts.queue, 1)
+	local definition: any = nil
+	for _, view in facts.views do if view.id == "bot" then definition = view end end
+	t.eq(definition.label, "@实际应用名"); t.eq(definition.count, 1)
+	t.eq(views.bot_label(nil), "@机器人"); t.eq(views.bot_label(""), "@机器人")
+	t.eq(views.bot_label("  "), "@机器人")
+	action(s, "source", "mention"); action(s, "person", "other")
+	t.eq(s.source, "all"); t.eq(s.person, nil)
+end)
+
+t.test("profile changes cannot keep another bot's detail or dialog selected", function()
+	local s = model(); s.cfg.settings.bot_profile = "first"; s.view = "bot"
+	local first = add(s, "first-profile", "reply"); first.bot_profile = "first"
+	local second = add(s, "second-profile", "reply"); second.bot_profile = "second"
+	s.selected, s.dialog, s.reading = first.id, first.id, true
+	update.apply(s, { type = "setting", setting = "bot_profile", value = "second" })
+	t.eq(s.selected, second.id); t.eq(s.dialog, nil); t.eq(s.reading, nil)
+	t.eq(update.facts(s).item.id, second.id); t.eq(#update.facts(s).queue, 1)
+	update.apply(s, { type = "select", id = first.id, open = true })
+	t.eq(s.selected, second.id)
+	s.selected, s.dialog = first.id, first.id
+	t.eq(update.facts(s).item, nil); t.eq(update.facts(s).dialog_item, nil)
+	update.apply(s, { type = "continue" })
+	t.eq(s.selected, second.id); t.eq(s.dialog, nil)
+	update.apply(s, { type = "setting", setting = "bot_profile", value = "" })
+	t.eq(s.selected, nil); t.eq(update.facts(s).item, nil); t.eq(#update.facts(s).queue, 0)
+end)
+
+t.test("commands associate existing tasks without duplication and survive an ordinary @me refresh and reload", function()
+	local s = model(); s.cfg.settings.bot_profile = "dedicated"; s.me = "me"
+	local m = add(s, "existing-task", "deep")
+	m.disposition, m.task = "doing", { phase = "working", new_messages = 0, result = "已有进展" }
+	local revision, task = m.revision, m.task
+	local out = update.apply(s, { type = "bot-message", bot_profile = "dedicated", message = message(m.id), instruction = "检查进度" })
+	t.eq(m.bot_profile, "dedicated"); t.eq(m.instruction, "检查进度")
+	t.eq(m.revision, revision); t.eq(m.task, task); t.eq(m.disposition, "doing")
+	t.eq(#effects(out, "write-task"), 0); t.eq(#effects(out, "thread"), 0)
+	matter.merge(s, { { mention = true, messages = { message(m.id) } } }, {}, {})
+	t.eq(m.via, "@我"); t.eq(m.bot_profile, "dedicated")
+	s.view = "bot"
+	local loaded = snapshot.decode(snapshot.encode(s), s.cfg) :: Model
+	local restored = update.facts(loaded)
+	t.eq(#restored.queue, 1); t.eq(restored.queue[1].instruction, "检查进度")
+	t.eq(restored.queue[1].task.result, "已有进展"); t.eq(restored.queue[1].bot_profile, "dedicated")
+end)
+
 t.test("with background off and no workbench open, nothing new is fetched or analyzed", function()
 	local s = model(); s.loaded = true
 	s.cfg.settings.background, s.cfg.settings.agent_enabled = false, true
@@ -160,12 +248,14 @@ end)
 
 t.test("a commanded message is analyzed at once despite filters and pauses, and a deep result starts its task", function()
 	local s = model(); s.loaded = true
+	s.cfg.settings.bot_profile = "dedicated"
 	s.cfg.settings.agent_enabled, s.cfg.settings.background, s.cfg.settings.concurrency = false, false, 1
 	s.cfg.rules.chat = { mode = "hide", name = "研发" }
 	local busy = add(s, "busy"); busy.analysis.phase, busy.analysis.stage = "running", "model"
-	local out = update.apply(s, { type = "bot-message", message = message("om_cmd"), instruction = "@bot 排查一下" })
+	local out = update.apply(s, { type = "bot-message", bot_profile = "dedicated", message = message("om_cmd"), instruction = "@bot 排查一下" })
 	local m = matter.find(s, "om_cmd") :: Matter
 	t.eq(m.hidden, false); t.eq(m.analysis.phase, "running"); t.eq(#effects(out, "thread"), 1)
+	t.eq(m.bot_profile, "dedicated")
 	m.thread = {}; m.analysis.stage = "model"
 	local j = status.manual_judgment(); j.kind, j.manual, j.task = "deep", false, { title = "排查", prompt = "排查报错", workspace = "" }
 	local assessed = effects(update.apply(s, { type = "analyzed", id = m.id, gen = m.analysis.gen, judgment = j }), "context")[1]

@@ -3,6 +3,7 @@ local t = require("./t")
 local snapshot = require("../src/core/snapshot")
 local types = require("../src/core/types")
 local status = require("../src/core/status")
+local matter = require("../src/core/matter")
 
 local function config(): types.Config
 	return { settings = { agent_enabled = true, show_images = true }, rules = {}, stars = {}, now = 1234567890 }
@@ -64,6 +65,54 @@ t.test("empty models use the supplied config and fresh runtime defaults", functi
 	t.eq(first.images == second.images, false)
 	t.eq(first.cursors == second.cursors, false)
 	t.eq(first.log == second.log, false)
+end)
+
+t.test("bot associations persist independently of source markers and isolate restored details", function()
+	local model = model_with_item()
+	local item = model.items[1]
+	item.bot_profile, item.instruction, item.via = "first-profile", "检查这条消息", "@我"
+	model.view, model.selected, model.dialog = "bot", item.id, item.id
+	local stored = snapshot.encode(model)
+	t.eq(stored.items[1].bot_profile, "first-profile")
+	local cfg = config(); cfg.settings.bot_profile = "first-profile"
+	local same = restored(stored, cfg)
+	t.eq(same.items[1].bot_profile, "first-profile"); t.eq(same.items[1].instruction, "检查这条消息")
+	t.eq(same.selected, item.id); t.eq(same.dialog, item.id)
+	cfg = config(); cfg.settings.bot_profile = "second-profile"
+	local other = restored(stored, cfg)
+	t.eq(other.items[1].bot_profile, "first-profile"); t.eq(other.selected, nil); t.eq(other.dialog, nil)
+	t.eq(other.source, "all"); t.eq(other.person, nil)
+end)
+
+t.test("legacy command associations require the exact bot marker and a configured nonempty profile", function()
+	local cfg = config(); cfg.settings.bot_profile = "dedicated"
+	local stored = packed(); stored.items[1].via = matter.BOT_VIA
+	t.eq(restored(stored, cfg).items[1].bot_profile, "dedicated")
+	t.eq(restored(stored).items[1].bot_profile, nil)
+	cfg.settings.bot_profile = ""
+	t.eq(restored(stored, cfg).items[1].bot_profile, nil)
+	cfg.settings.bot_profile = "dedicated"
+	for _, via in { "@我", "@所有人", "群聊", "私聊", "@实际应用名" } do
+		stored.items[1].via, stored.items[1].instruction = via, "看起来像指令"
+		t.eq(restored(stored, cfg).items[1].bot_profile, nil)
+	end
+	stored.items[1].via, stored.items[1].bot_profile = matter.BOT_VIA, "other-profile"
+	t.eq(restored(stored, cfg).items[1].bot_profile, "other-profile")
+end)
+
+t.test("old history page migrates to the bot source without clearing cached messages or their states", function()
+	local stored = packed()
+	stored.page, stored.source, stored.person, stored.selected = "history", "dm", "another-person", stored.items[1].id
+	stored.items[1].via, stored.items[1].disposition = matter.BOT_VIA, "archived"
+	stored.items[1].instruction = "缓存的指令"
+	local cfg = config(); cfg.settings.bot_profile = "dedicated"
+	local loaded = restored(stored, cfg)
+	t.eq(loaded.view, "bot"); t.eq(loaded.page, nil); t.eq(loaded.source, "all"); t.eq(loaded.person, nil)
+	t.eq(#loaded.items, 1); t.eq(loaded.items[1].disposition, "archived")
+	t.eq(loaded.items[1].instruction, "缓存的指令"); t.eq(loaded.items[1].content, stored.items[1].content)
+	t.eq(loaded.selected, stored.selected)
+	t.eq(snapshot.encode(loaded).page, nil)
+	t.eq(snapshot.encode(loaded).history, nil)
 end)
 
 t.test("v1 migrates source, folded ids, judgment, edits, thread and session", function()
@@ -340,6 +389,7 @@ t.test("schema errors identify invalid durable fields instead of returning an em
 		{ path = "disposition", corrupt = function(s) s.items[1].disposition = "sent" end },
 		{ path = "revision", corrupt = function(s) s.items[1].revision = -1 end },
 		{ path = "edits.reply", corrupt = function(s) s.items[1].edits.reply = 123 end },
+		{ path = "bot_profile", corrupt = function(s) s.items[1].bot_profile = 42 end },
 		{ path = "talk", corrupt = function(s) s.items[1].talk = false end },
 		{ path = "log", corrupt = function(s) s.log = false end },
 		{ path = "images", corrupt = function(s) s.images = false end },

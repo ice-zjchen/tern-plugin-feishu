@@ -78,7 +78,7 @@ local function fixture()
 	function f.sync(profile, current)
 		return f.bot.sync(current, profile, function(message) table.insert(f.reports, { message = message }) end)
 	end
-	function f.resolve(id, err, index) f.identities[index or #f.identities].done(id, err) end
+	function f.resolve(id, err, index, name) f.identities[index or #f.identities].done(id, err, if id then name or ("应用-" .. id) else nil) end
 	function f.fire(index)
 		local timer = f.timers[index or #f.timers]
 		assert(not timer.cancelled)
@@ -132,7 +132,7 @@ local event = f.message()
 local path = f.put(listener, "100_12_1.json", event)
 f.drain(); assert(#f.delivered == 0 and f.files[path] ~= nil)
 f.resolve("ou_bot")
-assert(listener.open_id == "ou_bot" and #f.runs == 1)
+assert(listener.open_id == "ou_bot" and listener.name == "应用-ou_bot" and #f.runs == 1)
 local argv = f.runs[1].argv
 assert(argv[1] == "/bin/sh" and argv[3] == 'exec "$@" 2>"$0"' and argv[#argv] == listener.dir)
 assert(f.runs[1].options.cwd == "data" and f.runs[1].options.timeout_ms == 31 * 60000)
@@ -162,8 +162,9 @@ local old = f.started("old")
 local old_token = old.token
 local path = f.put(old, "100_12_1.json", f.message("om_old"))
 local new = f.sync("new", old)
-assert(old.stopped and old.open_id == nil and f.stops[1] == old_token and new.dir ~= old.dir)
-f.resolve("ou_new")
+assert(old.stopped and old.open_id == nil and old.name == nil and f.stops[1] == old_token and new.dir ~= old.dir)
+f.resolve("ou_new", nil, nil, "真实返回的新机器人名")
+assert(new.name == "真实返回的新机器人名")
 f.ready(new)
 f.put(old, "101_12_2.json", f.message("om_late_old"))
 f.put(new, "102_13_1.json", f.message("om_new"))

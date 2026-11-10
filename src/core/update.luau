@@ -10,7 +10,6 @@ local views = require("./views")
 local text = require("../shared/text")
 local markup = require("../shared/markup")
 local schema = require("../shared/schema")
-local history = require("./history")
 
 type Model = types.Model
 type Matter = types.Matter
@@ -35,11 +34,12 @@ local function may_run(model: Model): boolean
 end
 
 local function selection(model: Model): views.Selection
-	return { view = model.view, source = model.source, person = model.person }
+	return { view = model.view, source = model.source, person = model.person, bot_profile = model.cfg.settings.bot_profile }
 end
 
 local function current(model: Model): Matter?
-	return matter.find(model, model.selected)
+	local m = matter.find(model, model.selected)
+	return if m and (model.view ~= "bot" or views.shows(selection(model), m)) then m else nil
 end
 
 local function queue(model: Model): { Matter }
@@ -322,6 +322,11 @@ local function setting_changed(model: Model, id: string, value: any, out: { Effe
 	model.settings_cursor = id
 	emit(out, { type = "setting", id = id, value = model.cfg.settings[id] })
 	matter.apply_rules(model)
+	if id == "bot_profile" then
+		if model.mode == "draft" or model.mode == "command" then focus(model, nil, out) end
+		model.selected, model.reading, model.dialog = nil, nil, nil
+		model.command, model.command_cursor = "", 0
+	end
 	reselect(model, 1)
 	lookup_missing_mutes(model, out)
 end
@@ -447,13 +452,16 @@ local function bot_message(model: Model, event: Event, out: { Effect })
 	end
 	local it = m :: Matter
 	local instruction = if type(event.instruction) == "string" and event.instruction ~= "" then event.instruction :: string else nil
+	-- Delivery is authenticated by the dedicated app runtime. Keep this durable
+	-- even when the ordinary @me refresh later replaces the presentation marker.
+	if type(event.bot_profile) == "string" and event.bot_profile ~= "" then it.bot_profile = event.bot_profile end
+	it.via, it.instruction = matter.BOT_VIA, instruction
 	if it.disposition == "doing" then
 		model.flash = it.name .. "：已有任务在执行，没有重复开始"
 		return
 	end
 	it.revision += 1
 	it.context, it.preparing, it.preparation = nil, nil, nil
-	it.via, it.instruction = matter.BOT_VIA, instruction
 	it.analysis.force = true
 	-- The command targets this exact message, even if it was folded into a burst.
 	it.latest_id, it.content, it.time, it.deleted, it.link = id, tostring(message.content or ""), tostring(message.create_time or ""), message.deleted == true, message.message_app_link
@@ -486,13 +494,16 @@ local function action(model: Model, event: Event, out: { Effect })
 		model.page = nil
 		if model.mode then focus(model, nil, out) end
 		model.view, model.person, model.selected, model.reading = value, nil, nil, nil
+		if value == "bot" then model.source = "all" end
 		model.command, model.command_cursor, model.flash = "", 0, nil
 		reselect(model, 1)
 	elseif name == "source" then
+		if model.view == "bot" then return end
 		if value ~= "all" and value ~= "mention" and value ~= "dm" then return end
 		model.source, model.person, model.selected, model.reading = value, nil, nil, nil
 		reselect(model, 1)
 	elseif name == "person" then
+		if model.view == "bot" then return end
 		model.person = if model.person == value then nil else value
 		model.selected, model.reading = nil, nil; reselect(model, 1)
 	elseif name == "refresh" then refresh(model, false, out)
@@ -731,22 +742,19 @@ end
 -- nothing and Tern need not render/save. Every async path validates its generation.
 function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 	local out: { Effect } = {}
+	if model.view == "bot" then
+		local selected = matter.find(model, model.selected)
+		if selected and not views.shows(selection(model), selected) then
+			model.selected, model.reading = nil, nil
+			if model.mode == "draft" or model.mode == "command" then focus(model, nil, out) end
+			reselect(model, 1)
+		end
+		local dialog = matter.find(model, model.dialog)
+		if dialog and not views.shows(selection(model), dialog) then model.dialog = nil end
+	end
 	local m = if type(event.id) == "string" then matter.find(model, event.id) else nil
 	local ty = event.type
 	local editing = if model.mode == "draft" then current(model) else nil
-	if ty == "history" or (ty == "action" and event.name == "history") then
-		local h = model.history or history.empty()
-		model.history = h
-		if ty == "action" then
-			model.page = "history"
-			focus(model, nil, out)
-			event = { type = "history", name = "open" }
-		end
-		for _, effect in history.apply(h, event) do emit(out, effect) end
-		if editing then request_context(model, editing, out) end
-		emit(out, { type = "save" })
-		return out, true
-	end
 	if ty == "select" or ty == "move" or ty == "read-status" or ty == "setting" then
 		model.queue_enabled = true
 	elseif ty == "action" and PUMP_ACTIONS[event.name] then
@@ -759,14 +767,12 @@ function update.apply(model: Model, event: Event): ({ Effect }, boolean)
 			local selected = current(model)
 			if selected then show_images(model, selected, out) end
 		elseif may_run(model) then refresh(model, false, out) end
-		if model.page == "history" then
-			local h = model.history or history.empty()
-			model.history = h
-			for _, effect in history.apply(h, { name = "open" }) do emit(out, effect) end
-		end
 	elseif ty == "action" then action(model, event, out)
 	elseif ty == "select" then
-		if m then select_item(model, m.id, out); model.reading = true; if event.open then open_message(model, m, out) end end
+		if m and (model.view ~= "bot" or views.shows(selection(model), m)) then
+			select_item(model, m.id, out); model.reading = true
+			if event.open then open_message(model, m, out) end
+		end
 	elseif ty == "move" then
 		local shown = queue(model)
 		if #shown > 0 then select_item(model, shown[math.clamp(index_of(shown, model.selected) + event.direction, 1, #shown)].id, out) end
@@ -1062,13 +1068,17 @@ end
 
 -- Render data, computed from one model snapshot. No storage reads in the UI.
 function update.facts(model: Model): any
-	local counts = views.counts(model.items)
+	local counts = views.counts(model.items, model.cfg.settings.bot_profile)
 	local defs, running = {}, 0
-	for _, v in views.LIST do table.insert(defs, { id = v.id, label = v.label, count = counts[v.id] }) end
+	for _, v in views.LIST do
+		table.insert(defs, { id = v.id, label = if v.id == "bot" then views.bot_label(model.cfg.bot_name) else v.label, count = counts[v.id] })
+	end
 	for _, m in model.items do if m.analysis.phase == "running" then running += 1 end end
 	local m = current(model)
+	local dialog = matter.find(model, model.dialog)
+	if dialog and model.view == "bot" and not views.shows(selection(model), dialog) then dialog = nil end
 	return { running = running, views = defs, queue = queue(model), has_more = update.has_more(model),
-		item = m, dialog_item = matter.find(model, model.dialog),
+		item = m, dialog_item = dialog,
 		draft = if m then status.field_text(m) else "", reply_draft = if m then status.reply_text(m) else "" }
 end
 

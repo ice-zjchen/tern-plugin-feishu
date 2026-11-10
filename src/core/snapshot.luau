@@ -4,6 +4,7 @@
 local types = require("./types")
 local schema = require("../shared/schema")
 local task_rules = require("./task")
+local matter = require("./matter")
 
 type Model = types.Model
 type Matter = types.Matter
@@ -262,6 +263,7 @@ local function read_item(value: any, path: string, legacy: boolean, old_workspac
 		mention = boolean_value(item.mention, path .. ".mention", if legacy then false else nil),
 		via = string_value(item.via, path .. ".via", if legacy then "群聊" else nil),
 		instruction = optional_string(item.instruction, path .. ".instruction"),
+		bot_profile = optional_string(item.bot_profile, path .. ".bot_profile"),
 		folded = folded, latest_id = optional_string(item.latest_id, path .. ".latest_id"),
 		is_read = optional_boolean(item.is_read, path .. ".is_read"),
 		analysis = {
@@ -342,6 +344,12 @@ function snapshot.decode(value: any, cfg: Config): Model?
 	local seen: { [string]: boolean } = {}
 	for i, raw in array(stored.items, "items") do
 		local item = read_item(raw, "items[" .. tostring(i) .. "]", legacy, stored.version < 3)
+		-- Only the old authenticated-command marker establishes a legacy source.
+		-- An ordinary @me, sender type, instruction or task never does.
+		local profile = cfg.settings.bot_profile
+		if item.bot_profile == nil and item.via == matter.BOT_VIA and type(profile) == "string" and profile ~= "" then
+			item.bot_profile = profile
+		end
 		if item.id == "" or seen[item.id] then
 			invalid("items[" .. tostring(i) .. "].id", "unique nonempty message id")
 		end
@@ -360,7 +368,8 @@ function snapshot.decode(value: any, cfg: Config): Model?
 	model.person = optional_string(stored.person, "person")
 	model.selected = optional_string(stored.selected, "selected")
 	if stored.page ~= nil then
-		model.page = choice(stored.page, "page", { "settings", "history" })
+		local page = choice(stored.page, "page", { "settings", "history" })
+		if page == "history" then model.view, model.page = "bot", nil else model.page = page end
 	end
 	if stored.mode ~= nil then
 		model.mode = choice(stored.mode, "mode", { "draft", "command", "setting" })
@@ -415,6 +424,20 @@ function snapshot.decode(value: any, cfg: Config): Model?
 			end
 		end
 	end
+	if model.view == "bot" then
+		model.source, model.person = "all", nil
+		local selected, dialog = false, false
+		local profile = cfg.settings.bot_profile
+		for _, item in model.items do
+			if type(profile) == "string" and profile ~= "" and item.bot_profile == profile then
+				selected = selected or item.id == model.selected
+				dialog = dialog or item.id == model.dialog
+			end
+		end
+		if not selected then model.selected, model.reading = nil, nil end
+		if not dialog then model.dialog = nil end
+		if not selected and (model.mode == "draft" or model.mode == "command") then model.mode = nil end
+	end
 	return model
 end
 
@@ -425,6 +448,7 @@ local function encode_item(item: Matter): any
 		name = item.name, sender_id = item.sender_id, sender_type = item.sender_type, time = item.time,
 		content = item.content, deleted = item.deleted, link = item.link, mention = item.mention, via = item.via,
 		instruction = item.instruction,
+		bot_profile = item.bot_profile,
 		folded = table.clone(item.folded), latest_id = item.latest_id, is_read = item.is_read,
 		analysis = {
 			phase = a.phase, judgment = copy_data(a.judgment, "analysis.judgment"), error = a.error, session = a.session,

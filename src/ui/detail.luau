@@ -1,6 +1,7 @@
 local p = require("./primitives")
 local thread = require("./thread")
 local status = require("../core/status")
+local views = require("../core/views")
 local markup = require("../shared/markup")
 local time = require("../shared/time")
 local ui, t, line, folded, kv_row = p.ui, p.t, p.line, p.folded, p.kv_row
@@ -79,7 +80,11 @@ local function analysis_block(model: any, item: any): any
 	if item.sender_type ~= "user" then
 		byline ..= " · " .. (if item.sender_type == "bot" then "机器人" else "身份未知")
 	end
-	if item.via and item.via ~= "" then
+	if item.bot_profile then
+		local name = if item.bot_profile == model.cfg.settings.bot_profile then model.cfg.bot_name else nil
+		byline ..= " · 经 " .. views.bot_label(name)
+	end
+	if item.via and item.via ~= "" and not (item.bot_profile and item.via == "@机器人") then
 		byline ..= " · " .. item.via
 	end
 	local tools: { any } = {}
@@ -408,7 +413,9 @@ function detail.render(model: any, facts: any, wide: boolean): any
 		end
 		table.insert(children, conversation(model, item))
 	else
-		table.insert(children, line({ t("选择队列里的一条消息，查看判断和下一步。", "muted") }, { role = "fl.empty" }))
+		local empty = if model.view == "bot" then "这里汇总你通过 " .. views.bot_label(model.cfg.bot_name) .. " 发起的指令与任务（含已处理）。选择一项查看原始消息、指令和任务状态。"
+			else "选择队列里的一条消息，查看判断和下一步。"
+		table.insert(children, line({ t(empty, "muted") }, { role = "fl.empty" }))
 	end
 	return ui.node("col", { key = "right", role = "fl.detail", gap = "lg" }, children)
 end

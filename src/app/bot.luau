@@ -16,7 +16,7 @@ local OPTIONAL_TEXT = { "content", "reply_to", "root_id", "thread_id", "event_id
 local MENTION_TEXT = { "id", "key", "name" }
 
 export type Listener = {
-	profile: string, open_id: string?, token: string?, retry: any, stopped: boolean,
+	profile: string, open_id: string?, name: string?, token: string?, retry: any, stopped: boolean,
 	dir: string?, run: number, diagnostics: string?, diagnostic_offset: number,
 	ready: boolean, exit_reason: string?, integrity: string?, run_error: string?, file_error: string?,
 	report: (string?) -> (), reported: boolean, notice: string?, delivered: { [string]: boolean },
@@ -36,7 +36,7 @@ end
 
 local function stop(listener: Listener)
 	listener.stopped = true
-	listener.open_id = nil
+	listener.open_id, listener.name = nil, nil
 	if listener.retry then listener.retry:cancel(); listener.retry = nil end
 	if listener.token then proc.stop(listener.token) end
 end
@@ -143,10 +143,10 @@ function bot.sync(current: Listener?, profile: string, report: (string?) -> ()):
 		listener.run_error = nil
 		if listener.open_id then consume(); return end
 		publish(listener)
-		lark.bot_info(profile, function(open_id, err)
+		lark.bot_info(profile, function(open_id, err, name)
 			if listener.stopped or active ~= listener then return end
 			if type(open_id) ~= "string" or open_id == "" then retry(err or "无法确认机器人身份。"); return end
-			listener.open_id = open_id
+			listener.open_id, listener.name = open_id, name
 			consume()
 		end)
 	end

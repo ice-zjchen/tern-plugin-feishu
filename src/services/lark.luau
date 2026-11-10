@@ -296,15 +296,16 @@ function lark.message(message_id: string, done: (any, string?) -> ())
 end
 
 -- Bot identity is scoped to its profile; mention IDs must match this exact ID.
-function lark.bot_info(profile: string, done: (string?, string?) -> ())
+function lark.bot_info(profile: string, done: (string?, string?, string?) -> ())
 	local started = pcall(function()
 		tern.process.run({ tern.kv.get("cli") or "lark-cli", "--profile", profile, "api", "GET",
 			"/open-apis/bot/v3/info", "--as", "bot", "--format", "json" }, { env = ENV, timeout_ms = 20000 }, function(result)
 			local envelope = decode(result.stdout) or decode(result.stderr)
 			local bot = envelope and envelope.data
 			if result.status == 0 and envelope and envelope.ok == true and type(bot) == "table"
-				and type(bot.open_id) == "string" and bot.open_id ~= "" then
-				done(bot.open_id, nil)
+				and type(bot.open_id) == "string" and bot.open_id ~= ""
+				and type(bot.app_name) == "string" and string.find(bot.app_name, "%S") then
+				done(bot.open_id, nil, bot.app_name)
 			else
 				done(nil, failure(envelope, "无法取得专用机器人的身份，请确认 profile、机器人能力及应用发布状态。"))
 			end

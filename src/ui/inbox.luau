@@ -5,7 +5,6 @@ local queue = require("./queue")
 local detail = require("./detail")
 local thread = require("./thread")
 local settings = require("./settings")
-local history = require("./history")
 local ui, t, line = p.ui, p.t, p.line
 
 local inbox = {}
@@ -64,12 +63,6 @@ function inbox.render(model: any, facts: any, cx: any): any
 				settings.render(model),
 			}),
 			dock = layout.dock(model, facts, density),
-		}
-	end
-	if model.page == "history" then
-		return {
-			main = root(compact, { layout.header(model, facts, compact), history.body(model, compact) }),
-			dock = history.dock(model, compact),
 		}
 	end
 	if compact then

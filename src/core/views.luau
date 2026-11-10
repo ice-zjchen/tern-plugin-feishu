@@ -25,6 +25,7 @@ views.LIST = {
 		id = "fyi", label = "可忽略",
 		holds = function(m: Matter): boolean return m.disposition == nil and status.of(m) == "fyi" end,
 	},
+	{ id = "bot", label = "@机器人", holds = function(m: Matter): boolean return m.bot_profile ~= nil and m.bot_profile ~= "" end },
 } :: { View }
 
 local BY_ID: { [string]: View } = {}
@@ -36,10 +37,18 @@ function views.known(id: any): boolean
 	return type(id) == "string" and BY_ID[id] ~= nil
 end
 
-export type Selection = { view: string, source: string, person: string? }
+export type Selection = { view: string, source: string, person: string?, bot_profile: string? }
 
--- Whether a matter is shown under `sel`. Hidden matters never are.
+function views.bot_label(name: string?): string
+	return if name and string.find(name, "%S") then "@" .. name else "@机器人"
+end
+
+-- The bot source is a profile-scoped record of commands, including hidden and
+-- settled matters; normal views retain their source, person and rule filters.
 function views.shows(sel: Selection, m: Matter): boolean
+	if sel.view == "bot" then
+		return sel.bot_profile ~= nil and sel.bot_profile ~= "" and m.bot_profile == sel.bot_profile
+	end
 	if m.hidden then
 		return false
 	end
@@ -98,15 +107,16 @@ function views.visible(items: { Matter }, sel: Selection): { Matter }
 end
 
 -- How many matters each view holds, ignoring the source and person filters.
-function views.counts(items: { Matter }): { [string]: number }
+function views.counts(items: { Matter }, bot_profile: string?): { [string]: number }
 	local counts: { [string]: number } = {}
 	for _, v in views.LIST do
 		counts[v.id] = 0
 	end
 	for _, m in items do
+		if bot_profile and bot_profile ~= "" and m.bot_profile == bot_profile then counts.bot += 1 end
 		if not m.hidden then
 			for _, v in views.LIST do
-				if v.holds(m) then
+				if v.id ~= "bot" and v.holds(m) then
 					counts[v.id] += 1
 				end
 			end

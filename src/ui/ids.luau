@@ -5,8 +5,6 @@ local ids = {
 	DRAFT_ID = "main.body.right.reply.draft",
 	COMMAND_ID = "main.body.right.reply.correction.input.field",
 	QUEUE_PREFIX = "main.body.middle.queue.items.",
-	-- Phone-width history rows; the table elsewhere reports bare row ids.
-	HISTORY_PREFIX = "main.history.0.messages.table.",
 }
 
 function ids.field_control_id(id: string): string
