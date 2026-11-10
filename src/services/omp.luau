@@ -6,6 +6,7 @@ local prompts = require("./prompts")
 local stage = require("./stage")
 local text = require("../shared/text")
 local context_trace = require("../core/context_trace")
+local ai_error = require("../shared/ai_error")
 local proc = require("./proc")
 
 local omp = {}
@@ -147,15 +148,6 @@ local function read_events(stdout: string): (string?, string?, number, string?, 
 	return session, said, cost, failure, run
 end
 
-local function first_error_line(stderr: string): string
-	for line in string.gmatch(stderr, "[^\n]+") do
-		if not string.find(line, "Still starting", 1, true) and not string.find(line, "logs:", 1, true)
-			and not string.find(line, "Warning:", 1, true) then
-			return string.sub(line, 1, 300)
-		end
-	end
-	return "没有错误输出"
-end
 
 -- Runs one turn and returns its stop token (nil when nothing was started).
 -- `notice` gets the workspace fallback warning (or nil); `done` gets the
@@ -190,7 +182,7 @@ function omp.turn(turn: Turn, notice: (string?) -> (), done: Done): string?
 		if result.timed_out then
 			done(nil, session, cost, "AI 超时（" .. tostring(timeout_ms // 60000) .. " 分钟），可在“运行”设置中延长后手动重试。", run)
 		elseif result.status ~= 0 then
-			done(nil, session, cost, "AI 程序退出码 " .. tostring(result.status) .. "：" .. first_error_line(result.stderr), run)
+			done(nil, session, cost, ai_error.exit(result.status, result.stderr or ""), run)
 		elseif failure then
 			done(nil, session, cost, failure, run)
 		elseif not said then
